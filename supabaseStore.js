@@ -3,6 +3,7 @@ import { supabase } from './supabase.js';
 let persistenceEnabled = false;
 let syncQueue = Promise.resolve();
 let pendingState = null;
+let pendingOptions = {};
 let syncTimer = null;
 let syncResolvers = [];
 
@@ -153,6 +154,7 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true) 
 
 export function persistQuizState(state, role = 'teacher', options = {}) {
   pendingState = state;
+  pendingOptions = { ...options };
   if (!persistenceEnabled) return syncQueue;
   clearTimeout(syncTimer);
   let resolveSync;
@@ -164,6 +166,8 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
   syncResolvers.push({ resolve: resolveSync, reject: rejectSync, waitForSync: Boolean(options.waitForSync) });
   syncTimer = setTimeout(() => {
     const stateToPersist = pendingState;
+    const optionsToPersist = pendingOptions;
+    pendingOptions = {};
     syncQueue = syncQueue.then(async () => {
       if (!stateToPersist) return;
       if (role === 'student') {
@@ -200,13 +204,13 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
       const deletedAttempts = await supabase.from('quiz_attempts').delete().eq('quiz_id', quizId);
       if (deletedAttempts.error) {
         reportError('quiz record deletion', deletedAttempts.error);
-        if (options.waitForSync) throw deletedAttempts.error;
+        if (optionsToPersist.waitForSync) throw deletedAttempts.error;
       }
     }
     const existingQuestions = await supabase.from('questions').select('id');
     if (existingQuestions.error) {
       reportError('question synchronization', existingQuestions.error);
-      if (options.waitForSync) throw existingQuestions.error;
+      if (optionsToPersist.waitForSync) throw existingQuestions.error;
       return;
     }
 
@@ -225,7 +229,7 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
       if (result.error) {
         questionSyncFailed = true;
         reportError('question synchronization', result.error);
-        if (options.waitForSync) throw result.error;
+        if (optionsToPersist.waitForSync) throw result.error;
         continue;
       }
       if (!result.data?.length && isUuid(question.id)) {
@@ -233,7 +237,7 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
         if (result.error) {
           questionSyncFailed = true;
           reportError('question recovery', result.error);
-          if (options.waitForSync) throw result.error;
+          if (optionsToPersist.waitForSync) throw result.error;
           continue;
         }
       }
@@ -242,7 +246,7 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
         questionSyncFailed = true;
         const error = new Error('Supabase did not return a saved question ID.');
         reportError('question synchronization', error);
-        if (options.waitForSync) throw error;
+        if (optionsToPersist.waitForSync) throw error;
         continue;
       }
       question.id = savedQuestion.id;
@@ -255,7 +259,7 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
       if (result.error) reportError('question deletion', result.error);
     }
 
-    const configResult = await supabase.from('quiz_config').upsert({
+    const configResult = optionsToPersist.skipConfig ? null : await supabase.from('quiz_config').upsert({
       id: 1,
       course_name: state.config.courseName || null,
       course_code: state.config.courseCode || null,
@@ -267,15 +271,15 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
       published: state.questionsPublished,
       stopped: state.quizStopped
     });
-    if (configResult.error) {
+    if (configResult?.error) {
       reportError('configuration synchronization', configResult.error);
-      if (options.waitForSync) throw configResult.error;
+      if (optionsToPersist.waitForSync) throw configResult.error;
     }
 
     const latestWorkspaceResult = await supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle();
     if (latestWorkspaceResult.error) {
       reportError('workspace loading before synchronization', latestWorkspaceResult.error);
-      if (options.waitForSync) throw latestWorkspaceResult.error;
+      if (optionsToPersist.waitForSync) throw latestWorkspaceResult.error;
     }
     const latestWorkspace = latestWorkspaceResult.data?.data || {};
     const deletedQuizIds = new Set([...(latestWorkspace.deletedQuizIds || []), ...(stateToPersist.deletedQuizIds || [])]);
@@ -297,7 +301,7 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
     });
     if (snapshotResult.error) {
       reportError('question snapshot synchronization', snapshotResult.error);
-      if (options.waitForSync) throw snapshotResult.error;
+      if (optionsToPersist.waitForSync) throw snapshotResult.error;
     }
     const workspaceResult = await supabase.from('quiz_workspace').upsert({
       id: 1,
@@ -319,7 +323,7 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
     });
     if (workspaceResult.error) {
       reportError('workspace synchronization', workspaceResult.error);
-      if (options.waitForSync) throw workspaceResult.error;
+      if (optionsToPersist.waitForSync) throw workspaceResult.error;
     }
 
     for (const result of state.results) {
@@ -346,7 +350,7 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
       syncResolvers = [];
       resolvers.forEach(request => request.resolve());
     });
-  }, options.waitForSync ? 0 : 250);
+  }, optionsToPersist.waitForSync ? 0 : 250);
 
   return syncComplete;
 }
