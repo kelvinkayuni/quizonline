@@ -1,6 +1,6 @@
 import { supabase } from './supabase.js';
 
-const PRESENCE_TIMEOUT_MS = 15000;
+const PRESENCE_TIMEOUT_MS = 30000;
 
 export async function markStudentOnline(username, quizId) {
   const { error } = await supabase.from('quiz_presence').upsert({
