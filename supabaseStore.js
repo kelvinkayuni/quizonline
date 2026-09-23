@@ -266,18 +266,33 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
       if (options.waitForSync) throw configResult.error;
     }
 
+    const latestWorkspaceResult = await supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle();
+    if (latestWorkspaceResult.error) {
+      reportError('workspace loading before synchronization', latestWorkspaceResult.error);
+      if (options.waitForSync) throw latestWorkspaceResult.error;
+    }
+    const latestWorkspace = latestWorkspaceResult.data?.data || {};
+    const deletedQuizIds = new Set([...(latestWorkspace.deletedQuizIds || []), ...(stateToPersist.deletedQuizIds || [])]);
+    const resultFilesById = new Map();
+    for (const file of latestWorkspace.resultFiles || []) {
+      if (!file.id?.startsWith('quiz-') || !deletedQuizIds.has(file.id.slice(5))) resultFilesById.set(file.id, file);
+    }
+    for (const file of stateToPersist.resultFiles || []) {
+      if (!file.id?.startsWith('quiz-') || !deletedQuizIds.has(file.id.slice(5))) resultFilesById.set(file.id, file);
+    }
     const workspaceResult = await supabase.from('quiz_workspace').upsert({
       id: 1,
       data: {
-        courseName: state.config.courseName || '',
-        courseCode: state.config.courseCode || '',
-        users: state.users,
-        importedFile: state.importedFile,
-        studentLoginActive: state.studentLoginActive,
-        resultFiles: state.resultFiles,
-        deletedQuizIds: state.deletedQuizIds,
-        activity: state.activity,
-        healthClearedAt: state.healthClearedAt
+        ...latestWorkspace,
+        courseName: stateToPersist.config.courseName || '',
+        courseCode: stateToPersist.config.courseCode || '',
+        users: stateToPersist.users,
+        importedFile: stateToPersist.importedFile,
+        studentLoginActive: stateToPersist.studentLoginActive,
+        resultFiles: [...resultFilesById.values()],
+        deletedQuizIds: [...deletedQuizIds],
+        activity: stateToPersist.activity,
+        healthClearedAt: stateToPersist.healthClearedAt
       },
       updated_at: new Date().toISOString()
     });
@@ -310,7 +325,7 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
       syncResolvers = [];
       resolvers.forEach(request => request.resolve());
     });
-  }, 250);
+  }, options.waitForSync ? 0 : 250);
 
   return syncComplete;
 }
