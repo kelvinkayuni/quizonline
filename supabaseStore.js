@@ -183,25 +183,42 @@ export function persistQuizState(state, role = 'teacher') {
     if (existingQuestions.error) return reportError('question synchronization', existingQuestions.error);
 
     const savedIds = new Set();
+    let questionSyncFailed = false;
     for (const question of state.questions) {
       const payload = { text: question.text, choices: question.choices, correct: question.correct, marks: question.marks };
-      let result = isUuid(question.id)
-        ? await supabase.from('questions').update(payload).eq('id', question.id).select('id')
-        : await supabase.from('questions').insert(payload).select('id');
+      let result;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        result = isUuid(question.id)
+          ? await supabase.from('questions').update(payload).eq('id', question.id).select('id')
+          : await supabase.from('questions').insert(payload).select('id');
+        if (!result.error && (result.data?.length || !isUuid(question.id))) break;
+      }
 
-      if (result.error) return reportError('question synchronization', result.error);
+      if (result.error) {
+        questionSyncFailed = true;
+        reportError('question synchronization', result.error);
+        continue;
+      }
       if (!result.data?.length && isUuid(question.id)) {
         result = await supabase.from('questions').insert(payload).select('id');
-        if (result.error) return reportError('question recovery', result.error);
+        if (result.error) {
+          questionSyncFailed = true;
+          reportError('question recovery', result.error);
+          continue;
+        }
       }
       const savedQuestion = result.data?.[0];
-      if (!savedQuestion?.id) return reportError('question synchronization', new Error('Supabase did not return a saved question ID.'));
+      if (!savedQuestion?.id) {
+        questionSyncFailed = true;
+        reportError('question synchronization', new Error('Supabase did not return a saved question ID.'));
+        continue;
+      }
       question.id = savedQuestion.id;
       savedIds.add(savedQuestion.id);
     }
 
     const staleIds = existingQuestions.data.map(row => row.id).filter(id => !savedIds.has(id));
-    if (staleIds.length) {
+    if (staleIds.length && !questionSyncFailed) {
       const result = await supabase.from('questions').delete().in('id', staleIds);
       if (result.error) reportError('question deletion', result.error);
     }
