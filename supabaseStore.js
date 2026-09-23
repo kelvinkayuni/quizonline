@@ -6,6 +6,15 @@ let pendingState = null;
 let pendingOptions = {};
 let syncTimer = null;
 let syncResolvers = [];
+const SUPABASE_REQUEST_TIMEOUT = 10000;
+
+function withTimeout(request, operation) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`${operation} timed out after ${SUPABASE_REQUEST_TIMEOUT / 1000} seconds.`)), SUPABASE_REQUEST_TIMEOUT);
+  });
+  return Promise.race([request, timeout]).finally(() => clearTimeout(timeoutId));
+}
 
 function isUuid(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value || '');
@@ -65,12 +74,22 @@ function normalizeAttempt(row) {
 }
 
 export async function hydrateQuizState(state, role = 'teacher', persist = true) {
-  const [questionsResult, configResult, attemptsResult, workspaceResult] = await Promise.all([
-    supabase.from('questions').select('*').order('created_at'),
-    supabase.from('quiz_config').select('*').eq('id', 1).maybeSingle(),
-    supabase.from('quiz_attempts').select('*').order('completed_at', { ascending: false }),
-    supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle()
-  ]);
+  let questionsResult;
+  let configResult;
+  let attemptsResult;
+  let workspaceResult;
+  try {
+    [questionsResult, configResult, attemptsResult, workspaceResult] = await Promise.all([
+      withTimeout(supabase.from('questions').select('*').order('created_at'), 'Question loading'),
+      withTimeout(supabase.from('quiz_config').select('*').eq('id', 1).maybeSingle(), 'Configuration loading'),
+      withTimeout(supabase.from('quiz_attempts').select('*').order('completed_at', { ascending: false }), 'Result loading'),
+      withTimeout(supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle(), 'Workspace loading')
+    ]);
+  } catch (error) {
+    persistenceEnabled = true;
+    reportError('initial synchronization', error);
+    return;
+  }
 
   if (!questionsResult.error) state.questions = questionsResult.data.map(normalizeQuestion);
   else reportError('question loading', questionsResult.error);
@@ -163,6 +182,9 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
     resolveSync = resolve;
     rejectSync = reject;
   });
+  if (options.waitForSync) {
+    setTimeout(() => rejectSync(new Error(`Supabase synchronization timed out after ${SUPABASE_REQUEST_TIMEOUT / 1000} seconds.`)), SUPABASE_REQUEST_TIMEOUT);
+  }
   syncResolvers.push({ resolve: resolveSync, reject: rejectSync, waitForSync: Boolean(options.waitForSync) });
   syncTimer = setTimeout(() => {
     const stateToPersist = pendingState;
