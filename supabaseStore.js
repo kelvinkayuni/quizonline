@@ -105,6 +105,9 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true) 
     }
     state.importedFile = workspace.importedFile || null;
     state.studentLoginActive = Boolean(workspace.studentLoginActive);
+    state.configSaved = typeof workspace.configSaved === 'boolean'
+      ? workspace.configSaved
+      : Boolean(configResult.data && (Number(configResult.data.total_questions) || Number(configResult.data.duration) || configResult.data.start_time || configResult.data.end_time));
     state.deletedQuizIds = Array.isArray(workspace.deletedQuizIds) ? workspace.deletedQuizIds : state.deletedQuizIds;
     state.resultFiles = Array.isArray(workspace.resultFiles) ? cleanedResultFiles : state.resultFiles;
     state.activity = Array.isArray(workspace.activity) ? workspace.activity : state.activity;
@@ -306,6 +309,7 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
         users: stateToPersist.users,
         importedFile: stateToPersist.importedFile,
         studentLoginActive: stateToPersist.studentLoginActive,
+        configSaved: Boolean(stateToPersist.configSaved),
         resultFiles: [...resultFilesById.values()],
         deletedQuizIds: [...deletedQuizIds],
         activity: stateToPersist.activity,
