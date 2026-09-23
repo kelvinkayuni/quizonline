@@ -107,6 +107,16 @@ function overviewView() {
   const average = state.results.length ? Math.round(state.results.reduce((sum, item) => sum + item.percentage, 0) / state.results.length) : 0;
   return `<section class="grid stat-grid"><div class="card stat"><span class="eyebrow">Question bank</span><span class="value">${state.questions.length}</span><span class="label">Reusable questions</span></div><div class="card stat"><span class="eyebrow">Student access</span><span class="value">${state.users.length}</span><span class="label">Registered accounts</span></div><div class="card stat"><span class="eyebrow">Live now</span><span class="value">${online}</span><span class="label"><span class="trend">● Active participants</span></span></div><div class="card stat"><span class="eyebrow">Average score</span><span class="value">${average}%</span><span class="label">Across completed quizzes</span></div></section><section class="grid two-col"><div class="card panel"><div class="panel-head"><div><h2>Quiz pulse</h2><p class="subtle">${state.config.start ? `Scheduled for ${formatDate(state.config.start)}` : 'Your next assessment at a glance'}</p></div><button class="btn btn-secondary btn-small" data-view="config">Edit setup</button></div><div class="grid" style="grid-template-columns: repeat(3, 1fr); margin: 30px 0 18px"><div><div class="eyebrow">Questions</div><strong style="display:block;font-size:25px;margin-top:9px">${state.config.totalQuestions}</strong></div><div><div class="eyebrow">Duration</div><strong style="display:block;font-size:25px;margin-top:9px">${state.config.duration}<small style="font-size:12px;color:var(--muted)"> min</small></strong></div><div><div class="eyebrow">Deadline</div><strong style="display:block;font-size:13px;margin-top:13px">${state.config.end ? new Date(state.config.end).toLocaleDateString() : 'Open'}</strong></div></div><div class="progress"><span style="width:${state.questions.length ? Math.min(100, (state.config.totalQuestions / state.questions.length) * 100) : 0}%"></span></div><p class="subtle" style="margin:9px 0 0">${state.questions.length} questions available in the bank</p></div><div class="card panel"><div class="panel-head"><div><h2>Live students</h2><p class="subtle">Presence updates as students enter the quiz.</p></div><span class="badge">${online} online</span></div>${liveStudents()}</div></section><section class="card panel" style="margin-top:17px"><div class="panel-head"><div><h2>Recent activity</h2><p class="subtle">The latest changes in your quiz workspace.</p></div><button class="btn btn-secondary btn-small" data-action="clear-activity" ${state.activity.length ? '' : 'disabled'}>Clear activity</button></div>${activityList()}</section>`;
 }
+function revokeStudentAccess() {
+  if (!session || session.role !== 'student') return;
+  stopTimer();
+  void markStudentOffline(session.username, session.quizId);
+  if (session.originalQuestions) state.questions = session.originalQuestions;
+  session = null;
+  saveWindowSession();
+  showToast('Your student access has been deactivated by the teacher.');
+  app();
+}
 function liveStudents() { const online = state.users.filter(user => user.status === 'online'); if (!online.length) return '<div class="empty">No students are currently taking the quiz.</div>'; return `<div class="activity">${online.map(user => `<div class="activity-item"><span class="activity-icon">${icon('pulse')}</span><div><strong>${esc(user.username)}</strong><br><span class="subtle">Currently answering</span></div><span class="status">Online</span></div>`).join('')}</div>`; }
 async function refreshLiveStudents() { if (!session || session.role !== 'teacher') return; if (!state.currentQuizId) { state.users = state.users.map(user => ({ ...user, status: 'offline' })); if (teacherView === 'overview' || teacherView === 'results') app(); return; } const liveUsernames = await loadLiveStudentUsernames(state.currentQuizId); if (!liveUsernames) return; const now = new Date().toISOString(); state.users = state.users.map(user => ({ ...user, status: liveUsernames.has(user.username) ? 'online' : 'offline', lastSeen: liveUsernames.has(user.username) ? user.lastSeen || now : user.lastSeen })); if (teacherView === 'overview' || teacherView === 'results') app(); }
 async function refreshTeacherQuizState() { if (!session || session.role !== 'teacher' || teacherMutationInFlight) return; const { data, error } = await supabase.from('quiz_config').select('quiz_id, published, stopped, total_questions, duration, start_time, end_time, course_name, course_code').eq('id', 1).maybeSingle(); if (error || !data) return; const nextQuizId = data.quiz_id || null; const nextStopped = Boolean(data.stopped); const nextPublished = Boolean(data.published) && !nextStopped; const nextConfig = { ...state.config, courseName: data.course_name || '', courseCode: data.course_code || '', totalQuestions: Number(data.total_questions) || 0, duration: Number(data.duration) || 0, start: toDateTimeLocal(data.start_time), end: toDateTimeLocal(data.end_time) }; const changed = state.currentQuizId !== nextQuizId || state.quizStopped !== nextStopped || state.questionsPublished !== nextPublished || state.config.totalQuestions !== nextConfig.totalQuestions || state.config.duration !== nextConfig.duration || state.config.start !== nextConfig.start || state.config.end !== nextConfig.end; if (!changed) return; state.currentQuizId = nextQuizId; state.quizStopped = nextStopped; state.questionsPublished = nextPublished; state.config = nextConfig; if (teacherView === 'questions' || teacherView === 'overview') app(); }
@@ -193,6 +203,10 @@ function bindEvents() {
   }
   if (session?.role === 'student') {
     studentQuizRefreshTimer = setInterval(async () => {
+      const accessResult = await supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle();
+      const accessData = accessResult.data?.data;
+      const hasStudentAccess = !accessResult.error && Boolean(accessData?.studentLoginActive && accessData.importedFile?.usernames?.includes(session?.username));
+      if (!hasStudentAccess) return revokeStudentAccess();
       const previousStart = state.config.start;
       const previousEnd = state.config.end;
       const previousQuizId = state.currentQuizId;
@@ -209,7 +223,7 @@ function bindEvents() {
         || previousStopped !== state.quizStopped;
       const scheduleChanged = previousStart !== state.config.start || previousEnd !== state.config.end;
       if (session?.role === 'student' && !session.completed && (availabilityChanged || quizStateChanged || scheduleChanged)) app();
-    }, 5000);
+    }, 2000);
   }
   if (session?.role === 'teacher' && teacherView === 'questions' && (!state.config.totalQuestions || !state.config.duration)) {
     const publishButton = document.querySelector('[data-action="publish-questions"]');
