@@ -372,7 +372,7 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
       syncResolvers = [];
       resolvers.forEach(request => request.resolve());
     });
-  }, optionsToPersist.waitForSync ? 0 : 250);
+  }, options.waitForSync ? 0 : 250);
 
   return syncComplete;
 }
