@@ -136,11 +136,17 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true) 
   if (persist) await persistQuizState(state, role);
 }
 
-export function persistQuizState(state, role = 'teacher') {
+export function persistQuizState(state, role = 'teacher', options = {}) {
   pendingState = state;
   if (!persistenceEnabled) return syncQueue;
   clearTimeout(syncTimer);
-  const syncComplete = new Promise(resolve => syncResolvers.push(resolve));
+  let resolveSync;
+  let rejectSync;
+  const syncComplete = new Promise((resolve, reject) => {
+    resolveSync = resolve;
+    rejectSync = reject;
+  });
+  syncResolvers.push({ resolve: resolveSync, reject: rejectSync, waitForSync: Boolean(options.waitForSync) });
   syncTimer = setTimeout(() => {
     const stateToPersist = pendingState;
     syncQueue = syncQueue.then(async () => {
@@ -180,7 +186,11 @@ export function persistQuizState(state, role = 'teacher') {
       if (deletedAttempts.error) reportError('quiz record deletion', deletedAttempts.error);
     }
     const existingQuestions = await supabase.from('questions').select('id');
-    if (existingQuestions.error) return reportError('question synchronization', existingQuestions.error);
+    if (existingQuestions.error) {
+      reportError('question synchronization', existingQuestions.error);
+      if (options.waitForSync) throw existingQuestions.error;
+      return;
+    }
 
     const savedIds = new Set();
     let questionSyncFailed = false;
@@ -197,6 +207,7 @@ export function persistQuizState(state, role = 'teacher') {
       if (result.error) {
         questionSyncFailed = true;
         reportError('question synchronization', result.error);
+        if (options.waitForSync) throw result.error;
         continue;
       }
       if (!result.data?.length && isUuid(question.id)) {
@@ -204,13 +215,16 @@ export function persistQuizState(state, role = 'teacher') {
         if (result.error) {
           questionSyncFailed = true;
           reportError('question recovery', result.error);
+          if (options.waitForSync) throw result.error;
           continue;
         }
       }
       const savedQuestion = result.data?.[0];
       if (!savedQuestion?.id) {
         questionSyncFailed = true;
-        reportError('question synchronization', new Error('Supabase did not return a saved question ID.'));
+        const error = new Error('Supabase did not return a saved question ID.');
+        reportError('question synchronization', error);
+        if (options.waitForSync) throw error;
         continue;
       }
       question.id = savedQuestion.id;
@@ -235,7 +249,10 @@ export function persistQuizState(state, role = 'teacher') {
       published: state.questionsPublished,
       stopped: state.quizStopped
     });
-    if (configResult.error) reportError('configuration synchronization', configResult.error);
+    if (configResult.error) {
+      reportError('configuration synchronization', configResult.error);
+      if (options.waitForSync) throw configResult.error;
+    }
 
     const workspaceResult = await supabase.from('quiz_workspace').upsert({
       id: 1,
@@ -252,7 +269,10 @@ export function persistQuizState(state, role = 'teacher') {
       },
       updated_at: new Date().toISOString()
     });
-    if (workspaceResult.error) reportError('workspace synchronization', workspaceResult.error);
+    if (workspaceResult.error) {
+      reportError('workspace synchronization', workspaceResult.error);
+      if (options.waitForSync) throw workspaceResult.error;
+    }
 
     for (const result of state.results) {
       const attemptResult = await supabase.from('quiz_attempts').upsert({
@@ -266,10 +286,17 @@ export function persistQuizState(state, role = 'teacher') {
       }, { onConflict: 'username,quiz_id' });
       if (attemptResult.error) reportError('result synchronization', attemptResult.error);
     }
-    }).catch(error => reportError('synchronization', error)).finally(() => {
+    }).catch(error => {
+      const requests = syncResolvers;
+      syncResolvers = [];
+      requests.forEach(request => {
+        if (request.waitForSync) request.reject(error);
+        else reportError('synchronization', error);
+      });
+    }).finally(() => {
       const resolvers = syncResolvers;
       syncResolvers = [];
-      resolvers.forEach(resolve => resolve());
+      resolvers.forEach(request => request.resolve());
     });
   }, 250);
 
