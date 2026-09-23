@@ -30,6 +30,10 @@ function toSupabaseTimestamp(value) {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
+function cleanCourseValue(value, legacyValue) {
+  return String(value || '').trim() === legacyValue ? '' : String(value || '');
+}
+
 function normalizeQuestion(row) {
   return {
     id: row.id,
@@ -73,8 +77,8 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true) 
   if (!configResult.error && configResult.data) {
     const config = configResult.data;
     state.config = {
-      courseName: config.course_name || '',
-      courseCode: config.course_code || '',
+      courseName: cleanCourseValue(config.course_name, 'Course'),
+      courseCode: cleanCourseValue(config.course_code, '34'),
       totalQuestions: Number(config.total_questions) || 0,
       duration: Number(config.duration) || 0,
       start: toDateTimeLocal(config.start_time),
@@ -96,8 +100,8 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true) 
     const cleanedResultFiles = storedResultFiles.map(({ questions, ...file }) => file);
     state.users = Array.isArray(workspace.users) ? workspace.users : state.users;
     if (!configResult.data) {
-      state.config.courseName = workspace.courseName || state.config.courseName || '';
-      state.config.courseCode = workspace.courseCode || state.config.courseCode || '';
+      state.config.courseName = cleanCourseValue(workspace.courseName || state.config.courseName || '', 'Course');
+      state.config.courseCode = cleanCourseValue(workspace.courseCode || state.config.courseCode || '', '34');
     }
     state.importedFile = workspace.importedFile || null;
     state.studentLoginActive = Boolean(workspace.studentLoginActive);
