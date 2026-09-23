@@ -95,8 +95,10 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true) 
     const storedResultFiles = Array.isArray(workspace.resultFiles) ? workspace.resultFiles : [];
     const cleanedResultFiles = storedResultFiles.map(({ questions, ...file }) => file);
     state.users = Array.isArray(workspace.users) ? workspace.users : state.users;
-    state.config.courseName = workspace.courseName || state.config.courseName || '';
-    state.config.courseCode = workspace.courseCode || state.config.courseCode || '';
+    if (!configResult.data) {
+      state.config.courseName = workspace.courseName || state.config.courseName || '';
+      state.config.courseCode = workspace.courseCode || state.config.courseCode || '';
+    }
     state.importedFile = workspace.importedFile || null;
     state.studentLoginActive = Boolean(workspace.studentLoginActive);
     state.deletedQuizIds = Array.isArray(workspace.deletedQuizIds) ? workspace.deletedQuizIds : state.deletedQuizIds;
