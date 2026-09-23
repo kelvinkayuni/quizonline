@@ -109,6 +109,9 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true) 
     state.resultFiles = Array.isArray(workspace.resultFiles) ? cleanedResultFiles : state.resultFiles;
     state.activity = Array.isArray(workspace.activity) ? workspace.activity : state.activity;
     state.healthClearedAt = workspace.healthClearedAt || null;
+    if (role === 'student' && workspace.currentQuizQuestions?.quizId === state.currentQuizId && Array.isArray(workspace.currentQuizQuestions.questions)) {
+      state.questions = workspace.currentQuizQuestions.questions.map(normalizeQuestion);
+    }
     if (storedResultFiles.some(file => Array.isArray(file.questions))) {
       const cleanupResult = await supabase.from('quiz_workspace').update({ data: { ...workspace, resultFiles: cleanedResultFiles }, updated_at: new Date().toISOString() }).eq('id', 1);
       if (cleanupResult.error) reportError('result file cleanup', cleanupResult.error);
@@ -280,12 +283,26 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
     for (const file of stateToPersist.resultFiles || []) {
       if (!file.id?.startsWith('quiz-') || !deletedQuizIds.has(file.id.slice(5))) resultFilesById.set(file.id, file);
     }
+    const questionSnapshot = {
+      quizId: stateToPersist.currentQuizId,
+      questions: stateToPersist.questions.map(question => ({ ...question }))
+    };
+    const snapshotResult = await supabase.from('quiz_workspace').upsert({
+      id: 1,
+      data: { ...latestWorkspace, currentQuizQuestions: questionSnapshot },
+      updated_at: new Date().toISOString()
+    });
+    if (snapshotResult.error) {
+      reportError('question snapshot synchronization', snapshotResult.error);
+      if (options.waitForSync) throw snapshotResult.error;
+    }
     const workspaceResult = await supabase.from('quiz_workspace').upsert({
       id: 1,
       data: {
         ...latestWorkspace,
         courseName: stateToPersist.config.courseName || '',
         courseCode: stateToPersist.config.courseCode || '',
+        currentQuizQuestions: questionSnapshot,
         users: stateToPersist.users,
         importedFile: stateToPersist.importedFile,
         studentLoginActive: stateToPersist.studentLoginActive,
