@@ -170,7 +170,7 @@ function bindEvents() {
   clearInterval(studentHeartbeatTimer);
   clearInterval(studentQuizRefreshTimer);
   if (session?.role === 'teacher') {
-    liveRefreshTimer = setInterval(() => { if (teacherMutationInFlight) return; void refreshLiveStudents(); void refreshTeacherQuizState(); void hydrateQuizState(state, 'teacher', false).then(() => { if (!teacherMutationInFlight && !document.activeElement?.closest('form')) app(); }); }, 5000);
+    liveRefreshTimer = setInterval(async () => { if (teacherMutationInFlight) return; await refreshTeacherQuizState(); await hydrateQuizState(state, 'teacher', false); await refreshLiveStudents(); if (!teacherMutationInFlight && !document.activeElement?.closest('form')) app(); }, 5000);
     if (teacherView === 'questions' && state.questionsPublished && !state.quizStopped && state.config.end) {
       teacherDeadlineTimer = setInterval(() => { if (quizHasEnded()) app(); }, 1000);
     }
