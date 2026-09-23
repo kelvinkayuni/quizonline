@@ -241,7 +241,15 @@ function studentHistoryTable(history) { if (!history.length) return '<div class=
 function formatTime(totalSeconds) { const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0'); const seconds = Math.max(0, totalSeconds % 60).toString().padStart(2, '0'); return `${minutes}:${seconds}`; }
 function addActivity(text, type = 'book') { state.activity.unshift({ text, type, time: new Date().toISOString() }); state.activity = state.activity.slice(0, 20); saveState(); }
 async function persistQuizControlState() { if (state.questionsPublished && state.currentQuizId) return; const result = await supabase.from('quiz_config').upsert({ id: 1, course_name: state.config.courseName || null, course_code: state.config.courseCode || null, total_questions: state.config.totalQuestions, duration: state.config.duration, start_time: state.config.start ? new Date(state.config.start).toISOString() : null, end_time: state.config.end ? new Date(state.config.end).toISOString() : null, quiz_id: state.currentQuizId, published: state.questionsPublished, stopped: state.quizStopped }); if (result.error) throw result.error; }
-async function confirmSavedConfiguration(expected) { const { data, error } = await supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle(); if (error) throw error; if (Boolean(data?.data?.configSaved) !== expected) throw new Error('Supabase did not confirm the configuration state.'); }
+async function confirmSavedConfiguration(expected) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt) await new Promise(resolve => setTimeout(resolve, 500));
+    const { data, error } = await supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle();
+    if (error) throw error;
+    if (Boolean(data?.data?.configSaved) === expected) return;
+  }
+  throw new Error(`Supabase did not confirm that the configuration was ${expected ? 'saved' : 'reset'} after four checks.`);
+}
 async function expireQuizDueToTime() { if (!state.questionsPublished || !state.currentQuizId || teacherMutationInFlight || !quizHasEnded()) return; teacherMutationInFlight = true; try { state.questionsPublished = false; state.quizStopped = false; state.currentQuizId = null; state.configSaved = false; Object.keys(state.studentSessions).forEach(username => delete state.studentSessions[username]); saveState(); await persistQuizControlState(); await persistQuizState(state, 'teacher', { waitForSync: true }); await confirmSavedConfiguration(false); showToast('Quiz ended. The time set is available for a new configuration.'); } catch (error) { showToast(`Quiz end could not be confirmed: ${error.message || error}`); } finally { teacherMutationInFlight = false; app(); } }
 function healthResults() { return state.results.filter(result => result.quizId === state.currentQuizId && (!state.healthClearedAt || result.completedAt > state.healthClearedAt)); }
 function bindEvents() {
