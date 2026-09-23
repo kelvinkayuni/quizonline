@@ -134,6 +134,7 @@ tr:last-child td { border: 0; }
 .result-hero { max-width: 580px; margin: 70px auto; padding: 42px; text-align: center; }
 .score-big { margin: 16px 0 4px; color: var(--teal); font-size: 67px; font-weight: 800; letter-spacing: -.09em; }
 .toast { position: fixed; right: 24px; bottom: 24px; z-index: 10; padding: 12px 16px; border-radius: 7px; background: var(--ink); color: white; font-size: 12px; opacity: 0; transform: translateY(12px); transition: .22s ease; pointer-events: none; }
+.toast.error { background: var(--coral); }
 .toast.show { opacity: 1; transform: translateY(0); }
 @media (max-width: 900px) { .shell { grid-template-columns: 1fr; } .sidebar { padding: 15px 16px; } .brand { padding: 0 3px 16px; } .nav-label, .sidebar-foot { display: none; } .nav { display: flex; overflow-x: auto; } .nav button { flex: 0 0 auto; } .main { padding: 25px 20px 40px; } .stat-grid { grid-template-columns: repeat(2, 1fr); } .two-col { grid-template-columns: 1fr; } }
 @media (max-width: 620px) { .login-page { grid-template-columns: 1fr; } .login-art { min-height: 290px; padding: 25px; } .art-copy { margin: auto 0 0; } .art-copy h1 { font-size: 45px; } .art-copy p, .art-note { display: none; } .login-side { padding: 28px 20px; } .topbar { align-items: flex-start; flex-direction: column; } .form-grid { grid-template-columns: 1fr; } .field.full { grid-column: auto; } .panel { padding: 17px; } .quiz-top { align-items: flex-start; flex-direction: column; margin-bottom: 33px; } .quiz-card { padding: 22px; } .quiz-question { font-size: 23px; } }
