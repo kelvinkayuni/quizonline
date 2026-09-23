@@ -21,6 +21,16 @@ export async function markStudentOffline(username, quizId) {
   if (error) console.warn('Could not mark student offline.', error);
 }
 
+export async function markStudentsOffline(usernames, quizId) {
+  if (!usernames?.length || !quizId) return;
+  const { error } = await supabase
+    .from('quiz_presence')
+    .update({ online: false, last_seen: new Date().toISOString() })
+    .in('username', usernames)
+    .eq('quiz_id', quizId);
+  if (error) console.warn('Could not clear student presence.', error);
+}
+
 export async function loadLiveStudentUsernames(quizId) {
   const { data, error } = await supabase
     .from('quiz_presence')
