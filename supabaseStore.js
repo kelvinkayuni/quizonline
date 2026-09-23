@@ -183,7 +183,10 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
       }
     for (const quizId of stateToPersist.deletedQuizIds || []) {
       const deletedAttempts = await supabase.from('quiz_attempts').delete().eq('quiz_id', quizId);
-      if (deletedAttempts.error) reportError('quiz record deletion', deletedAttempts.error);
+      if (deletedAttempts.error) {
+        reportError('quiz record deletion', deletedAttempts.error);
+        if (options.waitForSync) throw deletedAttempts.error;
+      }
     }
     const existingQuestions = await supabase.from('questions').select('id');
     if (existingQuestions.error) {
