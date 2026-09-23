@@ -192,7 +192,24 @@ function bindEvents() {
     }
   }
   if (session?.role === 'student') {
-    studentQuizRefreshTimer = setInterval(async () => { const previousEnd = state.config.end; await refreshStudentQuizState(); state.config.courseName = cleanLiveCourseValue(state.config.courseName, 'Course'); state.config.courseCode = cleanLiveCourseValue(state.config.courseCode, '34'); saveState(); if (session?.role === 'student' && !session.completed && state.config.end !== previousEnd) app(); }, 5000);
+    studentQuizRefreshTimer = setInterval(async () => {
+      const previousStart = state.config.start;
+      const previousEnd = state.config.end;
+      const previousQuizId = state.currentQuizId;
+      const previousPublished = state.questionsPublished;
+      const previousStopped = state.quizStopped;
+      const previousNotStarted = quizHasNotStarted();
+      await refreshStudentQuizState();
+      state.config.courseName = cleanLiveCourseValue(state.config.courseName, 'Course');
+      state.config.courseCode = cleanLiveCourseValue(state.config.courseCode, '34');
+      saveState();
+      const availabilityChanged = previousNotStarted !== quizHasNotStarted();
+      const quizStateChanged = previousQuizId !== state.currentQuizId
+        || previousPublished !== state.questionsPublished
+        || previousStopped !== state.quizStopped;
+      const scheduleChanged = previousStart !== state.config.start || previousEnd !== state.config.end;
+      if (session?.role === 'student' && !session.completed && (availabilityChanged || quizStateChanged || scheduleChanged)) app();
+    }, 5000);
   }
   if (session?.role === 'teacher' && teacherView === 'questions' && (!state.config.totalQuestions || !state.config.duration)) {
     const publishButton = document.querySelector('[data-action="publish-questions"]');
@@ -257,9 +274,28 @@ async function importUsers(event) { const file = event.target.files[0]; if (!fil
 function removeImportedUsers() { const usernames = new Set(state.importedFile?.usernames || []); if (usernames.size) state.users = state.users.filter(user => !usernames.has(user.username)); state.importedFile = null; state.studentLoginActive = false; }
 async function deleteUploadedFile() { if (state.studentLoginActive || teacherMutationInFlight) return; teacherMutationInFlight = true; try { const usernames = state.importedFile?.usernames || []; void markStudentsOffline(usernames, state.currentQuizId); removeImportedUsers(); saveState(); addActivity('The uploaded student workbook was deleted', 'users'); await persistQuizState(state, 'teacher', { waitForSync: true }); showToast('Uploaded file removed.'); app(); } catch (error) { showToast(`Uploaded file could not be deleted: ${error.message || error}`); } finally { teacherMutationInFlight = false; } }
 async function toggleStudentLoginActivation() { if (!state.importedFile || teacherMutationInFlight) return; teacherMutationInFlight = true; try { state.studentLoginActive = !state.studentLoginActive; if (!state.studentLoginActive) void markStudentsOffline(state.importedFile.usernames || [], state.currentQuizId); saveState(); addActivity(`Uploaded student login ${state.studentLoginActive ? 'activated' : 'deactivated'}`, 'users'); await persistQuizState(state, 'teacher', { waitForSync: true }); showToast(state.studentLoginActive ? 'Uploaded credentials are now active.' : 'Uploaded credentials are inactive.'); app(); } catch (error) { showToast(`Student login status could not be saved: ${error.message || error}`); } finally { teacherMutationInFlight = false; } }
-function resultFileQuizId(file) { return file?.id?.startsWith('quiz-') ? file.id.slice(5) : null; }
-async function deleteSelectedResultFile() { const file = state.resultFiles.find(item => item.id === selectedResultFileId) || state.resultFiles[0]; if (!file || teacherMutationInFlight) return; const quizId = resultFileQuizId(file); teacherMutationInFlight = true; try { if (quizId) state.deletedQuizIds = [...new Set([...state.deletedQuizIds, quizId])]; state.results = state.results.filter(result => result.quizId !== quizId); state.studentHistory = state.studentHistory.filter(result => result.quizId !== quizId); state.resultFiles = state.resultFiles.filter(item => item.id !== file.id); selectedResultFileId = state.resultFiles[0]?.id || null; saveState(); await persistQuizState(state, 'teacher', { waitForSync: true }); addActivity(`Result file ${file.name} was deleted`, 'results'); showToast('Selected quiz results deleted permanently.'); } catch (error) { showToast(`Selected results could not be deleted: ${error.message || error}`); } finally { teacherMutationInFlight = false; app(); } }
-function clearResultFileHistory() { if (!state.resultFiles.length && !state.results.length) return; const quizIds = new Set([...state.resultFiles.map(resultFileQuizId), ...state.results.map(result => result.quizId)].filter(Boolean)); state.deletedQuizIds = [...new Set([...state.deletedQuizIds, ...quizIds])]; state.resultFiles = []; state.results = []; state.studentHistory = []; selectedResultFileId = null; saveState(); addActivity('All quiz result file history was cleared', 'results'); showToast('Quiz result history cleared.'); app(); }
+function resultFileQuizIds(file) { const quizIds = new Set(); if (file?.id?.startsWith('quiz-')) quizIds.add(file.id.slice(5)); (file?.rows || []).forEach(row => { if (row.quizId) quizIds.add(row.quizId); }); return [...quizIds]; }
+async function deleteSelectedResultFile() { const file = state.resultFiles.find(item => item.id === selectedResultFileId) || state.resultFiles[0]; if (!file || teacherMutationInFlight) return; const quizIds = resultFileQuizIds(file); teacherMutationInFlight = true; try { state.deletedQuizIds = [...new Set([...state.deletedQuizIds, ...quizIds])]; state.results = state.results.filter(result => !quizIds.includes(result.quizId)); state.studentHistory = state.studentHistory.filter(result => !quizIds.includes(result.quizId)); state.resultFiles = state.resultFiles.filter(item => item.id !== file.id); selectedResultFileId = state.resultFiles[0]?.id || null; saveState(); await persistQuizState(state, 'teacher', { waitForSync: true }); addActivity(`Result file ${file.name} was deleted`, 'results'); showToast('Selected quiz results deleted permanently.'); } catch (error) { showToast(`Selected results could not be deleted: ${error.message || error}`); } finally { teacherMutationInFlight = false; app(); } }
+async function clearResultFileHistory() {
+  if ((!state.resultFiles.length && !state.results.length) || teacherMutationInFlight) return;
+  const quizIds = new Set([...state.resultFiles.flatMap(resultFileQuizIds), ...state.results.map(result => result.quizId)].filter(Boolean));
+  teacherMutationInFlight = true;
+  try {
+    state.deletedQuizIds = [...new Set([...state.deletedQuizIds, ...quizIds])];
+    state.resultFiles = [];
+    state.results = [];
+    state.studentHistory = [];
+    selectedResultFileId = null;
+    addActivity('All quiz result file history was cleared', 'results');
+    await persistQuizState(state, 'teacher', { waitForSync: true });
+    showToast('Quiz result history cleared.');
+  } catch (error) {
+    showToast(`Quiz result history could not be cleared: ${error.message || error}`);
+  } finally {
+    teacherMutationInFlight = false;
+    app();
+  }
+}
 function clearAssessmentHealth() { if (!healthResults().length) return; state.healthClearedAt = new Date().toISOString(); saveState(); addActivity('Assessment health metrics were cleared', 'results'); showToast('Assessment health cleared. Result files are still available.'); app(); }
 function clearRecentActivity() { if (!state.activity.length) return; state.activity = []; saveState(); showToast('Recent activity cleared.'); app(); }
 function downloadResults() { if (!window.XLSX) return; const file = state.resultFiles.find(item => item.id === selectedResultFileId) || state.resultFiles[0]; const results = file?.rows || state.results; if (!results.length) return; const rows = [['Student username', 'Number of questions attempted', 'Number answered incorrectly', 'Total marks obtained', 'Percentage score'], ...results.map(result => [result.username, result.attempted, result.incorrect, result.score, `${result.percentage}%`])]; const sheet = XLSX.utils.aoa_to_sheet(rows); const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, 'Results'); XLSX.writeFile(book, `${file?.name || 'online-quiz-results'}.xlsx`); showToast('Results workbook downloaded.'); }

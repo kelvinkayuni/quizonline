@@ -115,6 +115,9 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true) 
     }
   } else if (workspaceResult.error) reportError('workspace loading', workspaceResult.error);
 
+  const deletedQuizIds = new Set(state.deletedQuizIds);
+  state.results = state.results.filter(result => !result.quizId || !deletedQuizIds.has(result.quizId));
+  state.studentHistory = state.studentHistory.filter(result => !result.quizId || !deletedQuizIds.has(result.quizId));
   const attemptsByQuiz = new Map();
   state.results.forEach(result => {
     if (!result.quizId) return;
