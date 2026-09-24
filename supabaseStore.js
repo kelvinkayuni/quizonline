@@ -6,7 +6,7 @@ let pendingState = null;
 let pendingOptions = {};
 let syncTimer = null;
 let syncResolvers = [];
-const SUPABASE_REQUEST_TIMEOUT = 10000;
+const SUPABASE_REQUEST_TIMEOUT = 30000;
 
 function withTimeout(request, operation) {
   let timeoutId;
@@ -21,7 +21,7 @@ function isUuid(value) {
 }
 
 function reportError(operation, error) {
-  const detail = error?.message || (error ? String(error) : 'No error details were provided.');
+  const detail = [error?.message, error?.code, error?.details, error?.hint].filter(Boolean).join(' | ') || (error ? String(error) : 'No error details were provided.');
   console.warn(`Supabase ${operation} failed: ${detail}. Local data remains available.`, error);
   window.dispatchEvent(new CustomEvent('supabase-sync-error', { detail: { operation, error: { ...error, message: detail } } }));
 }
@@ -226,6 +226,38 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
         if (resultFileUpdate.error) reportError('result file synchronization', resultFileUpdate.error);
         return;
       }
+    if (optionsToPersist.workspaceOnly) {
+      const latestWorkspaceResult = await supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle();
+      if (latestWorkspaceResult.error) {
+        reportError('workspace loading before synchronization', latestWorkspaceResult.error);
+        if (optionsToPersist.waitForSync) throw latestWorkspaceResult.error;
+        return;
+      }
+      const latestWorkspace = latestWorkspaceResult.data?.data || {};
+      const workspaceResult = await supabase.from('quiz_workspace').upsert({
+        id: 1,
+        data: {
+          ...latestWorkspace,
+          courseName: stateToPersist.config.courseName || '',
+          courseCode: stateToPersist.config.courseCode || '',
+          users: stateToPersist.users,
+          importedFile: stateToPersist.importedFile,
+          studentLoginActive: stateToPersist.studentLoginActive,
+          studentQuestionOrders: stateToPersist.studentQuestionOrders,
+          configSaved: Boolean(stateToPersist.configSaved),
+          resultFiles: stateToPersist.resultFiles,
+          deletedQuizIds: stateToPersist.deletedQuizIds,
+          activity: stateToPersist.activity,
+          healthClearedAt: stateToPersist.healthClearedAt
+        },
+        updated_at: new Date().toISOString()
+      });
+      if (workspaceResult.error) {
+        reportError('workspace synchronization', workspaceResult.error);
+        if (optionsToPersist.waitForSync) throw workspaceResult.error;
+      }
+      return;
+    }
     for (const quizId of stateToPersist.deletedQuizIds || []) {
       const deletedAttempts = await supabase.from('quiz_attempts').delete().eq('quiz_id', quizId);
       if (deletedAttempts.error) {
@@ -320,15 +352,6 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
       quizId: stateToPersist.currentQuizId,
       questions: stateToPersist.questions.map(question => ({ ...question }))
     };
-    const snapshotResult = await supabase.from('quiz_workspace').upsert({
-      id: 1,
-      data: { ...latestWorkspace, currentQuizQuestions: questionSnapshot },
-      updated_at: new Date().toISOString()
-    });
-    if (snapshotResult.error) {
-      reportError('question snapshot synchronization', snapshotResult.error);
-      if (optionsToPersist.waitForSync) throw snapshotResult.error;
-    }
     const workspaceResult = await supabase.from('quiz_workspace').upsert({
       id: 1,
       data: {
