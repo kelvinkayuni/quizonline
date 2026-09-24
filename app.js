@@ -1,7 +1,7 @@
 function courseDisplayValue(value) { const normalized = String(value || '').trim(); return normalized === '34' || normalized.toLowerCase() === 'course' ? '' : normalized; }
 function studentCourseDetails() { const courseName = courseDisplayValue(state.config.courseName); const courseCode = courseDisplayValue(state.config.courseCode); return courseName || courseCode ? `<div class="course-banner">${courseName ? `<strong>${esc(courseName)}</strong>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''; }
 import { supabase } from './supabase.js';
-import { hydrateQuizState, persistQuizState } from './supabaseStore.js';
+import { deleteQuizAttempts, hydrateQuizState, persistQuizState } from './supabaseStore.js';
 import { loadLiveStudentUsernames, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 
 async function refreshStudentQuizState() {
@@ -561,9 +561,10 @@ async function clearResultFileHistory() {
     state.results = [];
     state.studentHistory = [];
     selectedResultFileId = null;
-    addActivity('All quiz result file history was cleared', 'results');
-    await persistQuizState(state, 'teacher', { waitForSync: true });
-    if (!(await confirmDeletedQuizAttempts([...quizIds]))) throw new Error('Supabase still contains result records for the cleared quizzes.');
+    state.activity.unshift({ text: 'All quiz result file history was cleared', type: 'results', time: new Date().toISOString() });
+    state.activity = state.activity.slice(0, 20);
+    await persistQuizState(state, 'teacher', { waitForSync: true, workspaceOnly: true });
+    await deleteQuizAttempts([...quizIds]);
     showToast('Quiz result history cleared.');
   } catch (error) {
     restoreState(previousState);

@@ -404,3 +404,21 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
 
   return syncComplete;
 }
+
+export async function deleteQuizAttempts(quizIds) {
+  const ids = [...new Set((quizIds || []).filter(Boolean))];
+  if (!ids.length) return;
+
+  const deleteResult = await withTimeout(
+    supabase.from('quiz_attempts').delete().in('quiz_id', ids),
+    'Result deletion'
+  );
+  if (deleteResult.error) throw deleteResult.error;
+
+  const verifyResult = await withTimeout(
+    supabase.from('quiz_attempts').select('quiz_id').in('quiz_id', ids),
+    'Result deletion verification'
+  );
+  if (verifyResult.error) throw verifyResult.error;
+  if (verifyResult.data?.length) throw new Error('Supabase still contains result records for the cleared quizzes.');
+}
