@@ -366,7 +366,7 @@ function bindEvents() { applyBranding(); const totalQuestionsField = document.qu
   if (session?.role === 'teacher') {
     liveRefreshTimer = setInterval(async () => { if (teacherMutationInFlight || (teacherView === 'questions' && document.querySelector('#question-form'))) return; await refreshTeacherQuizState(); await hydrateQuizState(state, 'teacher', false); await refreshLiveStudents(); if (!teacherMutationInFlight && !document.activeElement?.closest('form')) app(); }, 5000);
     if (state.questionsPublished && !state.quizStopped && state.config.end) {
-      teacherDeadlineTimer = setInterval(() => { if (quizHasEnded()) void expireQuizDueToTimeLegacy(); }, 1000);
+      teacherDeadlineTimer = setInterval(() => { if (quizHasEnded()) void expireQuizDueToTime(); }, 1000);
     }
   }
   if (session?.role === 'student' && !session.completed && session.started) {
