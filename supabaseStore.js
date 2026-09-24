@@ -21,7 +21,7 @@ function isUuid(value) {
 }
 
 function reportError(operation, error) {
-  const detail = error?.message || String(error);
+  const detail = error?.message || (error ? String(error) : 'No error details were provided.');
   console.warn(`Supabase ${operation} failed: ${detail}. Local data remains available.`, error);
   window.dispatchEvent(new CustomEvent('supabase-sync-error', { detail: { operation, error: { ...error, message: detail } } }));
 }
@@ -91,8 +91,11 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true) 
     return;
   }
 
-  if (!questionsResult.error && (questionsResult.data.length || !state.questions.length)) state.questions = questionsResult.data.map(normalizeQuestion);
-  else reportError('question loading', questionsResult.error);
+  if (!questionsResult.error) {
+    if (questionsResult.data.length || !state.questions.length) state.questions = questionsResult.data.map(normalizeQuestion);
+  } else {
+    reportError('question loading', questionsResult.error);
+  }
 
   if (!configResult.error && configResult.data) {
     const config = configResult.data;
