@@ -47,11 +47,6 @@ async function stopQuizForEveryone() {
     }
     if (!confirmed) throw new Error('Supabase did not confirm the stopped quiz state after three checks.');
 
-    state.deletedQuizIds = [...new Set([...state.deletedQuizIds, stoppedQuizId])];
-    state.results = state.results.filter(result => result.quizId !== stoppedQuizId);
-    state.studentHistory = state.studentHistory.filter(result => result.quizId !== stoppedQuizId);
-    state.resultFiles = state.resultFiles.filter(file => !file.id.includes(stoppedQuizId));
-    state.healthClearedAt = null;
     state.quizStopped = true;
     state.questionsPublished = false;
     state.currentQuizId = null;
@@ -67,7 +62,7 @@ async function stopQuizForEveryone() {
       } catch (error) {
         cleanupPending = true;
       }
-    showToast(cleanupPending ? 'Quiz stopped centrally. Result cleanup is still pending.' : 'Quiz stopped. Students can no longer continue.');
+    showToast(cleanupPending ? 'Quiz stopped. Student results are still synchronizing.' : 'Quiz stopped. Active student attempts will be saved and students can no longer continue.');
   } catch (error) {
     showToast(`Quiz stop could not be confirmed: ${error.message || error}`);
   } finally {
@@ -563,7 +558,7 @@ function clearRecentActivity() { if (!state.activity.length) return; state.activ
 function downloadResults() { if (!window.XLSX) return; const file = state.resultFiles.find(item => item.id === selectedResultFileId) || state.resultFiles[0]; const results = file?.rows || state.results; if (!results.length) return; const rows = [['Student username', 'Number of questions attempted', 'Number answered incorrectly', 'Total marks obtained', 'Percentage score'], ...results.map(result => [result.username, result.attempted, result.incorrect, result.score, `${result.percentage}%`])]; const sheet = XLSX.utils.aoa_to_sheet(rows); const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, 'Results'); XLSX.writeFile(book, `${file?.name || 'online-quiz-results'}.xlsx`); showToast('Results workbook downloaded.'); }
 function downloadStudentHistory() { if (!window.XLSX || !session) return; const history = state.studentHistory.filter(item => item.username === session.username); if (!history.length) return; const rows = [['Date', 'Duration (minutes)', 'Questions attempted', 'Questions right', 'Questions wrong', 'Marks scored', 'Total marks'], ...history.map(item => [formatDate(item.completedAt), item.durationMinutes, item.attempted, item.correct, item.incorrect, item.score, item.totalMarks])]; const sheet = XLSX.utils.aoa_to_sheet(rows); const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, 'Quiz history'); XLSX.writeFile(book, `${session.username}-quiz-history.xlsx`); showToast('Your quiz history was downloaded.'); }
 function clearStudentResult() { if (!session || session.role !== 'student' || !session.result) return; state.results = state.results.filter(item => !(item.username === session.username && item.quizId === session.result.quizId)); session.result = null; session.completed = true; saveState(); showToast('Current assessment result cleared. Your quiz history remains available.'); app(); }
-function startTimer() { stopTimer(); timerId = setInterval(() => { if (!session || session.role !== 'student' || session.completed) return stopTimer(); if (state.quizStopped || session.quizId !== state.currentQuizId) { stopTimer(); app(); return; } if (quizHasEnded()) { showToast('The deadline is reached. Your quiz is being submitted.'); void finishQuiz(true); return; } session.remaining -= 1; saveStudentSession(); const timer = document.querySelector('#timer'); if (timer) timer.textContent = formatTime(session.remaining); if (session.remaining <= 0) { showToast('Time is up. Your quiz is being submitted.'); void finishQuiz(true); } }, 1000); }
+function startTimer() { stopTimer(); timerId = setInterval(() => { if (!session || session.role !== 'student' || session.completed) return stopTimer(); if (state.quizStopped) { showToast('The quiz was stopped. Your current attempt is being submitted.'); void finishQuiz(true); return; } if (session.quizId !== state.currentQuizId) { stopTimer(); app(); return; } if (quizHasEnded()) { showToast('The deadline is reached. Your quiz is being submitted.'); void finishQuiz(true); return; } session.remaining -= 1; saveStudentSession(); const timer = document.querySelector('#timer'); if (timer) timer.textContent = formatTime(session.remaining); if (session.remaining <= 0) { showToast('Time is up. Your quiz is being submitted.'); void finishQuiz(true); } }, 1000); }
 function stopTimer() { if (timerId) clearInterval(timerId); timerId = null; }
 function submitAnswer() { if (state.quizStopped || quizHasEnded() || session.quizId !== state.currentQuizId) return showToast('This quiz is no longer active.'); const orderedQuestions = session.questionOrder || state.questions; const question = orderedQuestions[session.index]; session.feedback = { correct: session.selected === question.correct }; session.answers.push({ questionId: question.id, selected: session.selected, correct: session.feedback.correct }); saveStudentSession(); app(); }
 function nextQuestion() { if (state.quizStopped || quizHasEnded() || session.quizId !== state.currentQuizId) return showToast('This quiz is no longer active.'); const orderedQuestions = session.questionOrder || state.questions; if (session.index >= Math.min(state.config.totalQuestions, orderedQuestions.length) - 1) return finishQuiz(false); session.index += 1; session.selected = null; session.feedback = null; saveStudentSession(); app(); }
