@@ -80,8 +80,16 @@ async function expireQuizDueToTime() {
   if (!state.questionsPublished || !state.currentQuizId || teacherMutationInFlight || !quizHasEnded()) return;
   teacherMutationInFlight = true;
   try {
+    const activeSessions = Object.values(state.studentSessions || {}).filter(studentSession => studentSession && studentSession.quizId === state.currentQuizId && !studentSession.completed);
+
+    for (const studentSession of activeSessions) {
+      const result = finalizeStudentResult(studentSession, true);
+      studentSession.completed = true;
+      studentSession.result = result;
+    }
+
     state.questionsPublished = false;
-    state.quizStopped = false;
+    state.quizStopped = true;
     state.currentQuizId = null;
     state.configSaved = false;
     state.studentSessions = {};
@@ -97,9 +105,9 @@ async function expireQuizDueToTime() {
     await persistQuizControlState();
     await persistQuizState(state, 'teacher', { waitForSync: true });
     await confirmSavedConfiguration(false);
-    showToast('Quiz ended. Time configuration was cleared. Questions remain saved.');
+    showToast('Quiz ended. All active student attempts were finalized and saved before the quiz was closed.');
   } catch (error) {
-    showToast(`Quiz ended, but time reset could not be confirmed: ${error.message || error}`);
+    showToast(`Quiz ended, but result finalization could not be confirmed: ${error.message || error}`);
   } finally {
     teacherMutationInFlight = false;
     app();
@@ -559,7 +567,55 @@ function startTimer() { stopTimer(); timerId = setInterval(() => { if (!session 
 function stopTimer() { if (timerId) clearInterval(timerId); timerId = null; }
 function submitAnswer() { if (state.quizStopped || quizHasEnded() || session.quizId !== state.currentQuizId) return showToast('This quiz is no longer active.'); const orderedQuestions = session.questionOrder || state.questions; const question = orderedQuestions[session.index]; session.feedback = { correct: session.selected === question.correct }; session.answers.push({ questionId: question.id, selected: session.selected, correct: session.feedback.correct }); saveStudentSession(); app(); }
 function nextQuestion() { if (state.quizStopped || quizHasEnded() || session.quizId !== state.currentQuizId) return showToast('This quiz is no longer active.'); const orderedQuestions = session.questionOrder || state.questions; if (session.index >= Math.min(state.config.totalQuestions, orderedQuestions.length) - 1) return finishQuiz(false); session.index += 1; session.selected = null; session.feedback = null; saveStudentSession(); app(); }
-function finishQuiz(autoSubmitted) { stopTimer(); const count = Math.min(state.config.totalQuestions, state.questions.length); const quizQuestions = state.questions.slice(0, count); const answersById = Object.fromEntries(session.answers.map(answer => [answer.questionId, answer])); let score = 0; let totalMarks = 0; let incorrect = 0; let correct = 0; quizQuestions.forEach(question => { totalMarks += question.marks; const answer = answersById[question.id]; if (answer?.correct) { score += question.marks; correct++; } if (answer && !answer.correct) incorrect++; }); const result = { username: session.username, quizId: state.currentQuizId, answers: session.answers, attempted: session.answers.length, correct, incorrect, score, totalMarks, percentage: totalMarks ? Math.round(score / totalMarks * 100) : 0, durationMinutes: Math.max(1, Math.ceil((state.config.duration * 60 - session.remaining) / 60)), completedAt: new Date().toISOString() }; state.results = [...state.results.filter(item => !(item.username === session.username && item.quizId === result.quizId)), result]; state.studentHistory = [...state.studentHistory.filter(item => !(item.username === session.username && item.quizId === result.quizId)), result]; const fileId = `quiz-${state.currentQuizId || new Date().toISOString().slice(0, 10)}`; const existingFile = state.resultFiles.find(file => file.id === fileId); if (existingFile) existingFile.rows = [...existingFile.rows.filter(item => item.username !== result.username), result]; else state.resultFiles.unshift({ id: fileId, name: `online-quiz-results-${new Date().toISOString().slice(0, 10)}`, createdAt: new Date().toISOString(), rows: [result] }); state.users = state.users.map(user => user.username === session.username ? { ...user, status: 'offline', lastSeen: new Date().toISOString() } : user); saveState(); addActivity(`${session.username} ${autoSubmitted ? 'was auto-submitted' : 'completed the quiz'}`, 'check'); session.completed = true; session.result = result; app(); }
+function finalizeStudentResult(studentSession, autoSubmitted) {
+  const orderedQuestions = studentSession.questionOrder || state.questions;
+  const count = Math.min(state.config.totalQuestions || orderedQuestions.length, orderedQuestions.length);
+  const quizQuestions = orderedQuestions.slice(0, count);
+  const answersById = Object.fromEntries((studentSession.answers || []).map(answer => [answer.questionId, answer]));
+  let score = 0;
+  let totalMarks = 0;
+  let incorrect = 0;
+  let correct = 0;
+
+  quizQuestions.forEach(question => {
+    totalMarks += Number(question.marks) || 0;
+    const answer = answersById[question.id];
+    if (answer?.correct) {
+      score += Number(question.marks) || 0;
+      correct++;
+    }
+    if (answer && !answer.correct) incorrect++;
+  });
+
+  const result = {
+    username: studentSession.username,
+    quizId: state.currentQuizId,
+    answers: studentSession.answers || [],
+    attempted: (studentSession.answers || []).length,
+    correct,
+    incorrect,
+    score,
+    totalMarks,
+    percentage: totalMarks ? Math.round(score / totalMarks * 100) : 0,
+    durationMinutes: Math.max(1, Math.ceil(((Number(state.config.duration) || 0) * 60 - (studentSession.remaining ?? 0)) / 60)),
+    completedAt: new Date().toISOString()
+  };
+
+  state.results = [...state.results.filter(item => !(item.username === result.username && item.quizId === result.quizId)), result];
+  state.studentHistory = [...state.studentHistory.filter(item => !(item.username === result.username && item.quizId === result.quizId)), result];
+  const fileId = `quiz-${state.currentQuizId || new Date().toISOString().slice(0, 10)}`;
+  const existingFile = state.resultFiles.find(file => file.id === fileId);
+  if (existingFile) existingFile.rows = [...existingFile.rows.filter(item => item.username !== result.username), result];
+  else state.resultFiles.unshift({ id: fileId, name: `online-quiz-results-${new Date().toISOString().slice(0, 10)}`, createdAt: new Date().toISOString(), rows: [result] });
+
+  state.users = state.users.map(user => user.username === result.username ? { ...user, status: 'offline', lastSeen: new Date().toISOString() } : user);
+  studentSession.completed = true;
+  studentSession.result = result;
+
+  return result;
+}
+
+function finishQuiz(autoSubmitted) { stopTimer(); if (!session) return; const result = finalizeStudentResult(session, autoSubmitted); saveState(); addActivity(`${session.username} ${autoSubmitted ? 'was auto-submitted' : 'completed the quiz'}`, 'check'); session.completed = true; session.result = result; app(); }
 function cacheHydratedState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
 session = restoreWindowSession();
 if (!session) app();
