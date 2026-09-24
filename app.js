@@ -387,6 +387,7 @@ function bindEvents() { applyBranding(); const totalQuestionsField = document.qu
       const accessData = accessResult.data?.data;
       const hasStudentAccess = !accessResult.error && Boolean(accessData?.studentLoginActive && accessData.importedFile?.usernames?.includes(session?.username));
       if (!hasStudentAccess) return revokeStudentAccess();
+      const activeAttempt = session?.role === 'student' && session.started && !session.completed ? structuredClone(session) : null;
       const previousStart = state.config.start;
       const previousEnd = state.config.end;
       const previousQuizId = state.currentQuizId;
@@ -394,6 +395,11 @@ function bindEvents() { applyBranding(); const totalQuestionsField = document.qu
       const previousStopped = state.quizStopped;
       const previousNotStarted = quizHasNotStarted();
       await refreshStudentQuizStateRaw();
+      if (activeAttempt && state.quizStopped && session?.role === 'student' && !session.completed) {
+        session = activeAttempt;
+        await finishQuiz(true);
+        return;
+      }
       state.config.courseName = cleanLiveCourseValue(state.config.courseName, 'Course');
       state.config.courseCode = cleanLiveCourseValue(state.config.courseCode, '34');
       saveState();
@@ -446,7 +452,7 @@ function bindEvents() { applyBranding(); const totalQuestionsField = document.qu
   const resultSelect = document.querySelector('#result-file-select'); if (resultSelect) resultSelect.addEventListener('change', () => { selectedResultFileId = resultSelect.value; app(); });
   const addChoice = document.querySelector('[data-action="add-choice"]'); if (addChoice) addChoice.addEventListener('click', () => { const choices = document.querySelectorAll('[data-choice]'); const index = choices.length; if (index >= 8) return showToast('A question can have up to 8 choices.'); document.querySelector('#choices').insertAdjacentHTML('beforeend', choiceInput(index)); const row = document.querySelectorAll('.choice-row')[index]; row.querySelector('[data-action="remove-choice"]').addEventListener('click', () => { row.remove(); renumberChoices(); }); syncCorrectOptions(); updateChoiceCount(); });
   document.querySelectorAll('[data-action="remove-choice"]').forEach(button => button.addEventListener('click', () => { const choices = document.querySelectorAll('[data-choice]'); if (choices.length <= 2) return showToast('Keep at least two choices.'); button.closest('.choice-row').remove(); renumberChoices(); }));
-  document.querySelectorAll('[data-answer]').forEach(button => button.addEventListener('click', () => { if (!session.feedback) { session.selected = Number(button.dataset.answer); saveStudentSession(); app(); } }));
+  document.querySelectorAll('[data-answer]').forEach(button => button.addEventListener('click', () => { if (!session || session.completed || state.quizStopped) return; if (!session.feedback) { session.selected = Number(button.dataset.answer); saveStudentSession(); app(); } }));
   const submit = document.querySelector('[data-action="submit-answer"]'); if (submit) submit.addEventListener('click', submitAnswer);
   const next = document.querySelector('[data-action="next-question"]'); if (next) next.addEventListener('click', nextQuestion);
   if (session?.role === 'student' && !session.completed && session.started && document.querySelector('#timer')) startTimer();
