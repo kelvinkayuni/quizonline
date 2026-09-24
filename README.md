@@ -28,6 +28,8 @@ An internet connection is needed for Supabase, Google Fonts, and the SheetJS CDN
 
 Supabase tables and Row Level Security policies must exist before synchronization can succeed. The browser uses only `SUPABASE_URL` and `SUPABASE_ANON_KEY`; never expose `SUPABASE_SERVICE_ROLE_KEY` in frontend code.
 
+For completed-result storage and the teacher's Clear history action, run [`supabase-quiz-attempts-policies.sql`](supabase-quiz-attempts-policies.sql) in the Supabase SQL Editor. The current browser-based model requires `quiz_attempts` select, insert, update, and delete access for `anon` and `authenticated`.
+
 ## Shared workspace table
 
 Run this once in the Supabase SQL Editor so student access, activity, result files, and teacher dashboard data are shared across browsers:

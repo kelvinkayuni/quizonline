@@ -538,10 +538,22 @@ async function confirmDeletedResultFile(fileId, quizIds) {
   }
   return false;
 }
+async function confirmDeletedQuizAttempts(quizIds) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt) await new Promise(resolve => setTimeout(resolve, 500));
+    const { data, error } = await supabase.from('quiz_attempts').select('quiz_id').in('quiz_id', quizIds);
+    if (!error && (!data || data.length === 0)) return true;
+    if (error && attempt === 3) return false;
+  }
+  return false;
+}
 async function deleteSelectedResultFile() { const file = state.resultFiles.find(item => item.id === selectedResultFileId) || state.resultFiles[0]; if (!file || teacherMutationInFlight) return; const quizIds = resultFileQuizIds(file); teacherMutationInFlight = true; try { state.deletedQuizIds = [...new Set([...state.deletedQuizIds, ...quizIds])]; state.results = state.results.filter(result => !quizIds.includes(result.quizId)); state.studentHistory = state.studentHistory.filter(result => !quizIds.includes(result.quizId)); state.resultFiles = state.resultFiles.filter(item => item.id !== file.id); selectedResultFileId = state.resultFiles[0]?.id || null; saveState(); try { await persistQuizState(state, 'teacher', { waitForSync: true }); } catch (error) { if (!(await confirmDeletedResultFile(file.id, quizIds))) throw error; } addActivity(`Result file ${file.name} was deleted`, 'results'); showToast('Selected quiz results deleted permanently.'); } catch (error) { showToast(`Selected results could not be deleted: ${error.message || error}`); } finally { teacherMutationInFlight = false; app(); } }
 async function clearResultFileHistory() {
   if ((!state.resultFiles.length && !state.results.length) || teacherMutationInFlight) return;
   const quizIds = new Set([...state.resultFiles.flatMap(resultFileQuizIds), ...state.results.map(result => result.quizId)].filter(Boolean));
+  if (!quizIds.size) return showToast('Results could not be cleared because no quiz IDs were found.', 'error');
+  const previousState = structuredClone(state);
+  const previousSelectedResultFileId = selectedResultFileId;
   teacherMutationInFlight = true;
   try {
     state.deletedQuizIds = [...new Set([...state.deletedQuizIds, ...quizIds])];
@@ -551,8 +563,11 @@ async function clearResultFileHistory() {
     selectedResultFileId = null;
     addActivity('All quiz result file history was cleared', 'results');
     await persistQuizState(state, 'teacher', { waitForSync: true });
+    if (!(await confirmDeletedQuizAttempts([...quizIds]))) throw new Error('Supabase still contains result records for the cleared quizzes.');
     showToast('Quiz result history cleared.');
   } catch (error) {
+    restoreState(previousState);
+    selectedResultFileId = previousSelectedResultFileId;
     showToast(`Quiz result history could not be cleared: ${error.message || error}`);
   } finally {
     teacherMutationInFlight = false;
