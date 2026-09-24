@@ -73,16 +73,23 @@ function normalizeAttempt(row) {
   };
 }
 
-export async function hydrateQuizState(state, role = 'teacher', persist = true) {
+export async function hydrateQuizState(state, role = 'teacher', persist = true, username = '') {
   let questionsResult;
   let configResult;
   let attemptsResult;
   let workspaceResult;
+  if (role === 'student') {
+    state.results = [];
+    state.studentHistory = [];
+    state.resultFiles = [];
+  }
   try {
+    const attemptsRequest = supabase.from('quiz_attempts').select('*').order('completed_at', { ascending: false });
+    if (role === 'student') attemptsRequest.eq('username', username);
     [questionsResult, configResult, attemptsResult, workspaceResult] = await Promise.all([
       withTimeout(supabase.from('questions').select('*').order('created_at'), 'Question loading'),
       withTimeout(supabase.from('quiz_config').select('*').eq('id', 1).maybeSingle(), 'Configuration loading'),
-      withTimeout(supabase.from('quiz_attempts').select('*').order('completed_at', { ascending: false }), 'Result loading'),
+      withTimeout(attemptsRequest, 'Result loading'),
       withTimeout(supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle(), 'Workspace loading')
     ]);
   } catch (error) {
