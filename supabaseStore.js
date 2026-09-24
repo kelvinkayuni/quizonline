@@ -126,9 +126,9 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true) 
     state.importedFile = workspace.importedFile || null;
     state.studentLoginActive = Boolean(workspace.studentLoginActive);
     state.studentQuestionOrders = workspace.studentQuestionOrders && typeof workspace.studentQuestionOrders === 'object' ? workspace.studentQuestionOrders : state.studentQuestionOrders;
-    state.configSaved = typeof workspace.configSaved === 'boolean'
-      ? workspace.configSaved
-      : Boolean(configResult.data && (Number(configResult.data.total_questions) || Number(configResult.data.duration) || configResult.data.start_time || configResult.data.end_time));
+    state.configSaved = configResult.data
+      ? Boolean(Number(configResult.data.total_questions) || Number(configResult.data.duration) || configResult.data.start_time || configResult.data.end_time)
+      : Boolean(workspace.configSaved);
     state.deletedQuizIds = Array.isArray(workspace.deletedQuizIds) ? workspace.deletedQuizIds : state.deletedQuizIds;
     state.resultFiles = Array.isArray(workspace.resultFiles) ? cleanedResultFiles : state.resultFiles;
     state.activity = Array.isArray(workspace.activity) ? workspace.activity : state.activity;
