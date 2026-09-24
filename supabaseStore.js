@@ -91,7 +91,7 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true) 
     return;
   }
 
-  if (!questionsResult.error) state.questions = questionsResult.data.map(normalizeQuestion);
+  if (!questionsResult.error && (questionsResult.data.length || !state.questions.length)) state.questions = questionsResult.data.map(normalizeQuestion);
   else reportError('question loading', questionsResult.error);
 
   if (!configResult.error && configResult.data) {
