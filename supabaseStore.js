@@ -126,6 +126,7 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true, 
 
   if (!workspaceResult.error && workspaceResult.data?.data) {
     const workspace = workspaceResult.data.data;
+    const previousConfigResetAt = state.configResetAt || '';
     const storedResultFiles = Array.isArray(workspace.resultFiles) ? workspace.resultFiles : [];
     const cleanedResultFiles = storedResultFiles.map(({ questions, ...file }) => file);
     state.users = Array.isArray(workspace.users) ? workspace.users : state.users;
@@ -143,6 +144,8 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true, 
     state.resultFiles = Array.isArray(workspace.resultFiles) ? cleanedResultFiles : state.resultFiles;
     state.activity = Array.isArray(workspace.activity) ? workspace.activity : state.activity;
     state.healthClearedAt = workspace.healthClearedAt || null;
+    state.configResetAt = workspace.configResetAt || state.configResetAt || '';
+    if (state.configResetAt && state.configResetAt !== previousConfigResetAt) delete state.drafts.config;
     if (role === 'student' && workspace.currentQuizQuestions?.quizId === state.currentQuizId && Array.isArray(workspace.currentQuizQuestions.questions)) {
       state.questions = workspace.currentQuizQuestions.questions.map(normalizeQuestion);
     }
@@ -255,7 +258,8 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
           resultFiles: stateToPersist.resultFiles,
           deletedQuizIds: stateToPersist.deletedQuizIds,
           activity: stateToPersist.activity,
-          healthClearedAt: stateToPersist.healthClearedAt
+          healthClearedAt: stateToPersist.healthClearedAt,
+          configResetAt: stateToPersist.configResetAt
         },
         updated_at: new Date().toISOString()
       });
@@ -374,7 +378,8 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
         resultFiles: [...resultFilesById.values()],
         deletedQuizIds: [...deletedQuizIds],
         activity: stateToPersist.activity,
-        healthClearedAt: stateToPersist.healthClearedAt
+        healthClearedAt: stateToPersist.healthClearedAt,
+        configResetAt: stateToPersist.configResetAt
       },
       updated_at: new Date().toISOString()
     });
