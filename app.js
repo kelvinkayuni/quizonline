@@ -763,7 +763,6 @@ refreshStudentQuizStateRaw = async function refreshQuestionTypesForStudent() {
   const snapshot = data?.data?.currentQuizQuestions;
   if (error || snapshot?.quizId !== state.currentQuizId || !Array.isArray(snapshot.questions)) return;
   state.questions = snapshot.questions;
-  app();
 };
 
 session = restoreWindowSession();
