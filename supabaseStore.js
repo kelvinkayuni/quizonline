@@ -52,7 +52,6 @@ function normalizeQuestion(row) {
     choices: Array.isArray(row.choices) ? row.choices : [],
     correct: Number(row.correct) || 0,
     answer: String(row.answer || ''),
-    rubric: Array.isArray(row.rubric) ? row.rubric.map(String) : [],
     marks: Number(row.marks) || 1
   };
 }
@@ -80,7 +79,6 @@ function normalizeAttempt(row) {
 }
 
 export async function hydrateQuizState(state, role = 'teacher', persist = true, username = '') {
-  const preservePendingQuestions = role === 'teacher' && Boolean(state.pendingQuestionSync);
   let questionsResult;
   let configResult;
   let attemptsResult;
@@ -105,7 +103,7 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true, 
     return;
   }
 
-  if (!questionsResult.error && !preservePendingQuestions) {
+  if (!questionsResult.error) {
     state.questions = questionsResult.data.map(normalizeQuestion);
   } else {
     reportError('question loading', questionsResult.error);
@@ -153,7 +151,7 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true, 
     state.healthClearedAt = workspace.healthClearedAt || null;
     state.configResetAt = workspace.configResetAt || state.configResetAt || '';
     if (state.configResetAt && state.configResetAt !== previousConfigResetAt) delete state.drafts.config;
-    if (!preservePendingQuestions && workspace.currentQuizQuestions?.quizId === state.currentQuizId && Array.isArray(workspace.currentQuizQuestions.questions)) {
+    if (workspace.currentQuizQuestions?.quizId === state.currentQuizId && Array.isArray(workspace.currentQuizQuestions.questions)) {
       state.questions = workspace.currentQuizQuestions.questions.map(normalizeQuestion);
     }
     if (storedResultFiles.some(file => Array.isArray(file.questions))) {
@@ -293,12 +291,7 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
     const savedIds = new Set();
     let questionSyncFailed = false;
     for (const question of state.questions) {
-      const payload = {
-        text: question.text,
-        choices: question.choices,
-        correct: question.correct,
-        marks: question.marks
-      };
+      const payload = { text: question.text, choices: question.choices, correct: question.correct, marks: question.marks };
       let result;
       for (let attempt = 0; attempt < 3; attempt++) {
         result = isUuid(question.id)
