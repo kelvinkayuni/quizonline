@@ -206,7 +206,7 @@ function rootWord(word) {
   if (normalized.endsWith('ies') && normalized.length > 4) return `${normalized.slice(0, -3)}y`;
   if (normalized.endsWith('ied') && normalized.length > 4) return `${normalized.slice(0, -3)}y`;
 
-  if (normalized.endsWith('ing') && normalized.length > 5) {
+  if (normalized.endsWith('ing') && normalized.length > 4) {
     let root = normalized.slice(0, -3);
     if (/(.)\1$/.test(root)) root = root.slice(0, -1);
     if (eStemWords.has(`${root}e`)) root = `${root}e`;
@@ -241,8 +241,8 @@ function canonicalizeTokens(tokens) {
   const numbered = normalizeNumberWords(tokens);
   const phrasesReplaced = replacePhrases(numbered);
   const compoundsReplaced = replacePhrases(phrasesReplaced);
-  return compoundsReplaced.map(word => {
-    const root = rootWord(word);
+  const rooted = compoundsReplaced.map(rootWord);
+  return normalizePassiveVoice(rooted).map(root => {
     return synonyms.get(root) || root;
   });
 }
@@ -253,47 +253,46 @@ function normalizeAnswerTokens(value) {
   return contentWords.length ? contentWords : tokens;
 }
 
-function overlapCount(expected, response) {
-  const available = new Map();
-  response.forEach(word => available.set(word, (available.get(word) || 0) + 1));
-  let matched = 0;
-  expected.forEach(word => {
-    const count = available.get(word) || 0;
-    if (count > 0) {
-      matched++;
-      available.set(word, count - 1);
-    }
-  });
-  return matched;
+function normalizePassiveVoice(tokens) {
+  for (let index = 0; index < tokens.length - 4; index++) {
+    if (!auxiliaryVerbs.has(tokens[index + 1]) || tokens[index + 3] !== 'by') continue;
+    const verb = rootWord(tokens[index + 2]);
+    const subject = tokens.slice(index + 4);
+    return [...subject, verb, tokens[index]];
+  }
+  return tokens;
 }
 
-function expectedGroups(expectedAnswer) {
-  return String(expectedAnswer || '').split(';').map(group =>
-    group.split('/').map(normalizeAnswerTokens).filter(words => words.length)
+function sequenceMatches(expected, response) {
+  let expectedIndex = 0;
+  for (const word of response) {
+    if (word === expected[expectedIndex]) expectedIndex++;
+    if (expectedIndex === expected.length) return true;
+  }
+  return false;
+}
+
+function expectedGroups(expectedAnswer, rubricCriteria) {
+  const rubric = Array.isArray(rubricCriteria)
+    ? rubricCriteria.map(String).map(criterion => criterion.trim()).filter(Boolean)
+    : String(rubricCriteria || '').split(/\r?\n/).map(criterion => criterion.trim()).filter(Boolean);
+  const criteria = rubric.length ? rubric : String(expectedAnswer || '').split(';');
+  return criteria.map(criterion =>
+    criterion.split('/').map(normalizeAnswerTokens).filter(words => words.length)
   ).filter(alternatives => alternatives.length);
 }
 
-export function shortAnswerMatchScore(expectedAnswer, studentResponse) {
+export function shortAnswerMatchScore(expectedAnswer, studentResponse, rubricCriteria = []) {
   const responseWords = normalizeAnswerTokens(studentResponse);
-  const groups = expectedGroups(expectedAnswer);
+  const groups = expectedGroups(expectedAnswer, rubricCriteria);
   if (!responseWords.length || !groups.length) return 0;
 
-  let totalMatched = 0;
-  let totalExpected = 0;
-
-  groups.forEach(alternatives => {
-    const best = alternatives
-      .map(words => ({ words, matched: overlapCount(words, responseWords) }))
-      .sort((left, right) => right.matched / right.words.length - left.matched / left.words.length)[0];
-    totalMatched += best.matched;
-    totalExpected += best.words.length;
-  });
-
-  const similarity = totalExpected ? totalMatched / totalExpected : 0;
-  if (similarity === 1) return 1;
-  return similarity >= 0.8 ? 0.5 : 0;
+  const matchedCriteria = groups.filter(alternatives =>
+    alternatives.some(phrase => sequenceMatches(phrase, responseWords))
+  ).length;
+  return matchedCriteria / groups.length;
 }
 
-export function shortAnswerMatches(expectedAnswer, studentResponse) {
-  return shortAnswerMatchScore(expectedAnswer, studentResponse) === 1;
+export function shortAnswerMatches(expectedAnswer, studentResponse, rubricCriteria = []) {
+  return shortAnswerMatchScore(expectedAnswer, studentResponse, rubricCriteria) === 1;
 }

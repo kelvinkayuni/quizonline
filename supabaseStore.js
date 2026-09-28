@@ -52,6 +52,7 @@ function normalizeQuestion(row) {
     choices: Array.isArray(row.choices) ? row.choices : [],
     correct: Number(row.correct) || 0,
     answer: String(row.answer || ''),
+    rubric: Array.isArray(row.rubric) ? row.rubric.map(String) : [],
     marks: Number(row.marks) || 1
   };
 }

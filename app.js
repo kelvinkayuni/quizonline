@@ -237,7 +237,7 @@ function clearStudentSession(username) { delete state.studentSessions[username];
 function esc(value = '') { return String(value).replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[char])); }
 function formatDate(value) { if (!value) return 'Not scheduled'; return new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }); }
 function toDateTimeLocal(value) { if (!value) return ''; const date = new Date(value); if (Number.isNaN(date.getTime())) return ''; const pad = number => String(number).padStart(2, '0'); return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`; }
-function normalizeQuestion(row) { return { id: row.id, text: row.text, choices: Array.isArray(row.choices) ? row.choices : [], correct: Number(row.correct) || 0, marks: Number(row.marks) || 1 }; }
+function normalizeQuestion(row) { return { id: row.id, text: row.text, type: row.type === 'short-answer' ? 'short-answer' : 'multiple-choice', choices: Array.isArray(row.choices) ? row.choices : [], correct: Number(row.correct) || 0, answer: String(row.answer || ''), rubric: Array.isArray(row.rubric) ? row.rubric.map(String) : [], marks: Number(row.marks) || 1 }; }
 function shuffleQuestions(questions, seed = '') { const shuffled = [...questions]; let hash = 2166136261; for (const character of `${seed}:${state.currentQuizId || ''}`) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619); for (let index = shuffled.length - 1; index > 0; index--) { hash = Math.imul(hash ^ (hash >>> 13), 16777619); const swapIndex = (hash >>> 0) % (index + 1); [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]]; } return shuffled; }
 function quizIsLocked() { return Boolean(state.questionsPublished && !state.quizStopped && !quizHasEnded()); }
 function quizHasEnded() { return Boolean(state.config.end && Date.now() >= new Date(state.config.end).getTime()); }
@@ -663,7 +663,7 @@ questionList = function renderTypedQuestionList() {
   return state.questions.map((question, index) => {
     const shortAnswer = question.type === 'short-answer';
     const details = shortAnswer
-      ? `<p class="subtle" style="margin-bottom:0">Expected answer: ${esc(question.answer || '')}</p>`
+      ? `<p class="subtle" style="margin-bottom:0">Expected answer: ${esc(question.answer || '')}</p>${question.rubric?.length ? `<p class="subtle" style="margin-bottom:0">Scoring criteria: ${question.rubric.map(esc).join(' · ')}</p>` : ''}`
       : `<p class="subtle" style="margin-bottom:0">${question.choices.length} choices · Correct answer: ${String.fromCharCode(65 + question.correct)}</p>${question.choices.map((choice, choiceIndex) => `<div class="subtle">${String.fromCharCode(65 + choiceIndex)}. ${esc(choice)}</div>`).join('')}`;
     return `<article class="question-item"><div class="question-meta"><span class="badge">Q${String(index + 1).padStart(2, '0')}</span><span>${shortAnswer ? 'Short answer' : 'Multiple choice'} · ${question.marks} marks</span></div><h3 style="margin-top:12px">${esc(question.text)}</h3><div class="question-details" id="details-${question.id}">${details}</div><div class="question-actions"><button class="btn btn-secondary btn-small" data-action="expand-question" data-id="${question.id}">Expand</button><button class="btn btn-secondary btn-small" data-action="edit-question" data-id="${question.id}">Edit</button><button class="btn btn-coral btn-small" data-action="delete-question" data-id="${question.id}">Delete</button></div></article>`;
   }).join('');
@@ -682,7 +682,7 @@ questionsView = function questionBankWithShortAnswers() {
     markup = markup.replace('<form id="question-form">', '<form id="question-form" hidden>');
   }
   const disabled = quizIsLocked() ? 'disabled' : '';
-  const shortAnswerForm = `<section class="short-answer-section"><div class="short-answer-heading"><h3>${editingShortAnswer ? 'Edit short answer question' : 'Short answer question'}</h3><p class="subtle">Add a reusable question with its expected answer.</p></div><form id="short-answer-form"><input type="hidden" name="shortId" value="${editingShortAnswer ? esc(questionBeingEdited.id) : ''}" /><div class="field"><label>Question prompt</label><textarea name="shortText" placeholder="Write the question students will see..." required ${disabled}>${editingShortAnswer ? esc(questionBeingEdited.text) : ''}</textarea></div><div class="form-grid" style="margin-top:15px"><div class="field"><label>Expected answer</label><input name="expectedAnswer" placeholder="Write the correct answer" value="${editingShortAnswer ? esc(questionBeingEdited.answer || '') : ''}" required ${disabled} /></div><div class="field"><label>Marks</label><input name="shortMarks" type="number" min="1" value="${editingShortAnswer ? Number(questionBeingEdited.marks) || 1 : ''}" placeholder="Enter marks" required ${disabled} /></div></div><div style="display:flex;gap:9px;margin-top:18px"><button class="btn btn-primary" ${disabled}>${editingShortAnswer ? 'Update short answer' : 'Save short answer'}</button>${editingShortAnswer ? '<button type="button" class="btn btn-secondary" data-action="cancel-edit">Cancel</button>' : ''}</div></form></section>`;
+  const shortAnswerForm = `<section class="short-answer-section"><div class="short-answer-heading"><h3>${editingShortAnswer ? 'Edit short answer question' : 'Short answer question'}</h3><p class="subtle">Add a reusable question with its expected answer.</p></div><form id="short-answer-form"><input type="hidden" name="shortId" value="${editingShortAnswer ? esc(questionBeingEdited.id) : ''}" /><div class="field"><label>Question prompt</label><textarea name="shortText" placeholder="Write the question students will see..." required ${disabled}>${editingShortAnswer ? esc(questionBeingEdited.text) : ''}</textarea></div><div class="form-grid" style="margin-top:15px"><div class="field"><label>Expected answer</label><input name="expectedAnswer" placeholder="Write a reference answer" value="${editingShortAnswer ? esc(questionBeingEdited.answer || '') : ''}" required ${disabled} /></div><div class="field"><label>Marks</label><input name="shortMarks" type="number" min="1" value="${editingShortAnswer ? Number(questionBeingEdited.marks) || 1 : ''}" placeholder="Enter marks" required ${disabled} /></div></div><div class="field" style="margin-top:15px"><label>Scoring criteria</label><textarea name="rubricCriteria" placeholder="Plants make food / Food is made by plants&#10;Uses sunlight" ${disabled}>${editingShortAnswer ? esc((questionBeingEdited.rubric || []).join('\n')) : ''}</textarea><p class="subtle">One equal-weight criterion per line. Use / to separate accepted phrasings. Leave blank to score the expected answer as one criterion.</p></div><div style="display:flex;gap:9px;margin-top:18px"><button class="btn btn-primary" ${disabled}>${editingShortAnswer ? 'Update short answer' : 'Save short answer'}</button>${editingShortAnswer ? '<button type="button" class="btn btn-secondary" data-action="cancel-edit">Cancel</button>' : ''}</div></form></section>`;
   return markup.replace('</form></div><div class="card panel">', `</form>${shortAnswerForm}</div><div class="card panel">`);
 };
 
@@ -692,8 +692,9 @@ function saveShortAnswerQuestion(event) {
   const data = new FormData(event.target);
   const text = String(data.get('shortText') || '').trim();
   const answer = String(data.get('expectedAnswer') || '').trim();
+  const rubric = String(data.get('rubricCriteria') || '').split(/\r?\n/).map(criterion => criterion.trim()).filter(Boolean);
   const id = data.get('shortId') || `q${Date.now()}`;
-  const question = { id, type: 'short-answer', text, answer, choices: [], correct: 0, marks: Number(data.get('shortMarks')) || 1 };
+  const question = { id, type: 'short-answer', text, answer, rubric, choices: [], correct: 0, marks: Number(data.get('shortMarks')) || 1 };
   const existingIndex = state.questions.findIndex(item => item.id === id);
   if (existingIndex >= 0) state.questions[existingIndex] = question;
   else state.questions.push(question);
@@ -746,7 +747,7 @@ submitAnswer = function submitTypedOrMultipleChoiceAnswer() {
   if (state.quizStopped || quizHasEnded() || session.quizId !== state.currentQuizId) return showToast('This quiz is no longer active.');
   const response = String(session.response || '').trim();
   if (!response) return;
-  const credit = shortAnswerMatchScore(question.answer, response);
+  const credit = shortAnswerMatchScore(question.answer, response, question.rubric);
   const correct = credit === 1;
   const partial = credit === 0.5;
   const marksAwarded = (Number(question.marks) || 1) * credit;
