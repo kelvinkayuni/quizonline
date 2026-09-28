@@ -95,7 +95,7 @@ const meaningPhrases = [
 ];
 const eStemWords = new Set([
   'make', 'use', 'write', 'drive', 'take', 'give', 'come', 'live',
-  'produce', 'change', 'bake', 'move', 'create', 'dance'
+  'produce', 'change', 'bake', 'move', 'create', 'dance', 'measure'
 ]);
 function expandContractions(value) {
   return String(value || '')
@@ -191,7 +191,6 @@ function replacePhrases(tokens) {
 function normalizeSpelling(word) {
   return spellingVariants.get(word) || word
     .replace(/our$/, 'or')
-    .replace(/re$/, 'er')
     .replace(/isation$/, 'ization')
     .replace(/ise$/, 'ize')
     .replace(/yse$/, 'yze')
