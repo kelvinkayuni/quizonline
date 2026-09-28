@@ -295,10 +295,8 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
     for (const question of state.questions) {
       const payload = {
         text: question.text,
-        type: question.type || 'multiple-choice',
         choices: question.choices,
         correct: question.correct,
-        answer: question.answer || null,
         marks: question.marks
       };
       let result;
