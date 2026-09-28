@@ -48,8 +48,10 @@ function normalizeQuestion(row) {
   return {
     id: row.id,
     text: row.text,
+    type: row.type === 'short-answer' ? 'short-answer' : 'multiple-choice',
     choices: Array.isArray(row.choices) ? row.choices : [],
     correct: Number(row.correct) || 0,
+    answer: String(row.answer || ''),
     marks: Number(row.marks) || 1
   };
 }
@@ -146,7 +148,7 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true, 
     state.healthClearedAt = workspace.healthClearedAt || null;
     state.configResetAt = workspace.configResetAt || state.configResetAt || '';
     if (state.configResetAt && state.configResetAt !== previousConfigResetAt) delete state.drafts.config;
-    if (role === 'student' && workspace.currentQuizQuestions?.quizId === state.currentQuizId && Array.isArray(workspace.currentQuizQuestions.questions)) {
+    if (workspace.currentQuizQuestions?.quizId === state.currentQuizId && Array.isArray(workspace.currentQuizQuestions.questions)) {
       state.questions = workspace.currentQuizQuestions.questions.map(normalizeQuestion);
     }
     if (storedResultFiles.some(file => Array.isArray(file.questions))) {

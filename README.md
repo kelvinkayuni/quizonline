@@ -21,7 +21,7 @@ An internet connection is needed for Supabase, Google Fonts, and the SheetJS CDN
 ## Included
 
 - Teacher dashboard with overview, question bank, quiz configuration, student Excel import, live monitoring, and results export.
-- Reusable multiple-choice questions with 2-8 choices and per-question marks.
+- Reusable multiple-choice and short-answer questions with per-question marks.
 - Student quiz flow with one question at a time, submit-gated feedback, timer, automatic submission, and no retakes after completion.
 - Questions, quiz configuration, and completed attempts synchronize with Supabase. Draft forms, active timers, imported workbook credentials, and browser login sessions remain local until they are moved to authenticated server-side tables.
 - `.xlsx` student import and results download through SheetJS.

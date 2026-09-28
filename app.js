@@ -650,6 +650,122 @@ async function finishQuiz(autoSubmitted) {
   app();
 }
 function cacheHydratedState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage())); }
+
+questionList = function renderTypedQuestionList() {
+  if (!state.questions.length) return '<div class="empty">Your question bank is empty. Add a question to begin.</div>';
+  return state.questions.map((question, index) => {
+    const shortAnswer = question.type === 'short-answer';
+    const details = shortAnswer
+      ? `<p class="subtle" style="margin-bottom:0">Expected answer: ${esc(question.answer || '')}</p>`
+      : `<p class="subtle" style="margin-bottom:0">${question.choices.length} choices · Correct answer: ${String.fromCharCode(65 + question.correct)}</p>${question.choices.map((choice, choiceIndex) => `<div class="subtle">${String.fromCharCode(65 + choiceIndex)}. ${esc(choice)}</div>`).join('')}`;
+    return `<article class="question-item"><div class="question-meta"><span class="badge">Q${String(index + 1).padStart(2, '0')}</span><span>${shortAnswer ? 'Short answer' : 'Multiple choice'} · ${question.marks} marks</span></div><h3 style="margin-top:12px">${esc(question.text)}</h3><div class="question-details" id="details-${question.id}">${details}</div><div class="question-actions"><button class="btn btn-secondary btn-small" data-action="expand-question" data-id="${question.id}">Expand</button><button class="btn btn-secondary btn-small" data-action="edit-question" data-id="${question.id}">Edit</button><button class="btn btn-coral btn-small" data-action="delete-question" data-id="${question.id}">Delete</button></div></article>`;
+  }).join('');
+};
+
+const multipleChoiceQuestionView = questionsView;
+questionsView = function questionBankWithShortAnswers() {
+  const questionBeingEdited = state.questions.find(question => question.id === editingQuestionId);
+  const editingShortAnswer = questionBeingEdited?.type === 'short-answer';
+  const selectedQuestionId = editingQuestionId;
+  if (editingShortAnswer) editingQuestionId = null;
+  let markup = multipleChoiceQuestionView();
+  editingQuestionId = selectedQuestionId;
+  if (editingShortAnswer) {
+    markup = markup.replace('<h2>Create a question</h2>', '<h2>Edit short answer question</h2>');
+    markup = markup.replace('<form id="question-form">', '<form id="question-form" hidden>');
+  }
+  const disabled = quizIsLocked() ? 'disabled' : '';
+  const shortAnswerForm = `<section class="short-answer-section"><div class="short-answer-heading"><h3>${editingShortAnswer ? 'Edit short answer question' : 'Short answer question'}</h3><p class="subtle">Add a reusable question with its expected answer.</p></div><form id="short-answer-form"><input type="hidden" name="shortId" value="${editingShortAnswer ? esc(questionBeingEdited.id) : ''}" /><div class="field"><label>Question prompt</label><textarea name="shortText" placeholder="Write the question students will see..." required ${disabled}>${editingShortAnswer ? esc(questionBeingEdited.text) : ''}</textarea></div><div class="form-grid" style="margin-top:15px"><div class="field"><label>Expected answer</label><input name="expectedAnswer" placeholder="Write the correct answer" value="${editingShortAnswer ? esc(questionBeingEdited.answer || '') : ''}" required ${disabled} /></div><div class="field"><label>Marks</label><input name="shortMarks" type="number" min="1" value="${editingShortAnswer ? Number(questionBeingEdited.marks) || 1 : ''}" placeholder="Enter marks" required ${disabled} /></div></div><div style="display:flex;gap:9px;margin-top:18px"><button class="btn btn-primary" ${disabled}>${editingShortAnswer ? 'Update short answer' : 'Save short answer'}</button>${editingShortAnswer ? '<button type="button" class="btn btn-secondary" data-action="cancel-edit">Cancel</button>' : ''}</div></form></section>`;
+  return markup.replace('</form></div><div class="card panel">', `</form>${shortAnswerForm}</div><div class="card panel">`);
+};
+
+function saveShortAnswerQuestion(event) {
+  event.preventDefault();
+  if (quizIsLocked()) return showToast('Stop the quiz before changing questions.');
+  const data = new FormData(event.target);
+  const text = String(data.get('shortText') || '').trim();
+  const answer = String(data.get('expectedAnswer') || '').trim();
+  const id = data.get('shortId') || `q${Date.now()}`;
+  const question = { id, type: 'short-answer', text, answer, choices: [], correct: 0, marks: Number(data.get('shortMarks')) || 1 };
+  const existingIndex = state.questions.findIndex(item => item.id === id);
+  if (existingIndex >= 0) state.questions[existingIndex] = question;
+  else state.questions.push(question);
+  state.questionsPublished = false;
+  state.studentSessions = {};
+  delete state.drafts.questions;
+  editingQuestionId = null;
+  addActivity(existingIndex >= 0 ? 'A saved question was updated' : 'A new short answer question was added', 'question');
+  saveState({ skipConfig: true });
+  showToast(existingIndex >= 0 ? 'Question updated. Submit questions again to publish changes.' : 'Short answer question saved to the bank.');
+  app();
+}
+
+document.addEventListener('submit', event => {
+  if (event.target?.id === 'short-answer-form') saveShortAnswerQuestion(event);
+});
+document.addEventListener('input', event => {
+  if (event.target?.form?.id === 'short-answer-form') saveTeacherDraft(event.target.form);
+});
+
+const multipleChoiceStudentView = studentApp;
+studentApp = function studentViewWithShortAnswer() {
+  let markup = multipleChoiceStudentView();
+  if (!session || session.completed) return markup;
+  const question = (session.questionOrder || state.questions)[session.index];
+  if (question?.type !== 'short-answer') return markup;
+  const response = String(session.response || '');
+  const responseMarkup = `<div class="answers"><div class="field full"><label for="short-answer-response">Your answer</label><textarea id="short-answer-response" placeholder="Type your answer..." ${session.feedback ? 'disabled' : ''}>${esc(response)}</textarea></div></div>`;
+  markup = markup.replace(/<div class="answers">[\s\S]*?<\/div>/, responseMarkup);
+  if (response.trim() && !session.feedback) markup = markup.replace('data-action="submit-answer" disabled', 'data-action="submit-answer"');
+  return markup;
+};
+
+document.addEventListener('input', event => {
+  if (event.target?.id !== 'short-answer-response' || !session || session.completed) return;
+  session.response = event.target.value;
+  saveStudentSession();
+  const submitButton = document.querySelector('[data-action="submit-answer"]');
+  if (submitButton) submitButton.disabled = !session.response.trim() || Boolean(session.feedback);
+});
+
+const submitMultipleChoiceAnswer = submitAnswer;
+submitAnswer = function submitTypedOrMultipleChoiceAnswer() {
+  const question = (session?.questionOrder || state.questions)[session?.index];
+  if (question?.type !== 'short-answer') return submitMultipleChoiceAnswer();
+  if (state.quizStopped || quizHasEnded() || session.quizId !== state.currentQuizId) return showToast('This quiz is no longer active.');
+  const response = String(session.response || '').trim();
+  if (!response) return;
+  const correct = response.toLowerCase() === String(question.answer || '').trim().toLowerCase();
+  session.feedback = { correct };
+  session.answers.push({ questionId: question.id, selected: response, correct });
+  saveStudentSession();
+  app();
+};
+
+nextQuestion = function nextTypedOrMultipleChoiceQuestion() {
+  if (state.quizStopped || quizHasEnded() || session.quizId !== state.currentQuizId) return showToast('This quiz is no longer active.');
+  const orderedQuestions = session.questionOrder || state.questions;
+  if (session.index >= Math.min(state.config.totalQuestions, orderedQuestions.length) - 1) return finishQuiz(false);
+  session.index += 1;
+  session.selected = null;
+  session.response = '';
+  session.feedback = null;
+  saveStudentSession();
+  app();
+};
+
+const refreshStudentQuizQuestions = refreshStudentQuizStateRaw;
+refreshStudentQuizStateRaw = async function refreshQuestionTypesForStudent() {
+  const previousQuizId = session?.quizId;
+  await refreshStudentQuizQuestions();
+  if (session && session.quizId !== previousQuizId) session.response = '';
+  const { data, error } = await supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle();
+  const snapshot = data?.data?.currentQuizQuestions;
+  if (error || snapshot?.quizId !== state.currentQuizId || !Array.isArray(snapshot.questions)) return;
+  state.questions = snapshot.questions;
+  app();
+};
+
 session = restoreWindowSession();
 if (!session) app();
 stateHydrationPromise = hydrateQuizState(state, session?.role, false, session?.username || '').finally(() => { reconcileStudentSession(); cacheHydratedState(); stateHydrated = true; app(); });
