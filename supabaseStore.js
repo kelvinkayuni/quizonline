@@ -59,14 +59,17 @@ function normalizeQuestion(row) {
 function normalizeAttempt(row) {
   const answers = Array.isArray(row.answers) ? row.answers : [];
   const attempted = row.attempted ?? answers.length;
-  const incorrect = row.incorrect ?? answers.filter(answer => !answer.correct).length;
+  const incorrect = row.incorrect ?? answers.filter(answer => !answer.correct && !answer.partial).length;
+  const correct = row.correct ?? answers.filter(answer => answer.correct).length;
+  const partial = answers.filter(answer => answer.partial).length;
   return {
     username: row.username,
     quizId: row.quiz_id || null,
     answers,
     attempted: Number(attempted) || 0,
-    correct: Number(row.correct) || Math.max(0, attempted - incorrect),
+    correct: Number(correct) || 0,
     incorrect: Number(incorrect) || 0,
+    partial,
     score: Number(row.score) || 0,
     totalMarks: Number(row.total_marks) || 0,
     percentage: Number(row.percentage) || 0,

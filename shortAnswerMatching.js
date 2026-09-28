@@ -32,33 +32,160 @@ const spellingVariants = new Map(
   spellingVariantGroups.flatMap(group => group.map(word => [word, group[0]]))
 );
 
-const irregularPlurals = new Map([
-  ['children', 'child'],
-  ['men', 'man'],
-  ['women', 'woman'],
-  ['feet', 'foot'],
-  ['teeth', 'tooth'],
-  ['geese', 'goose'],
-  ['mice', 'mouse'],
-  ['lice', 'louse'],
-  ['oxen', 'ox'],
-  ['indices', 'index'],
-  ['matrices', 'matrix'],
-  ['analyses', 'analysis'],
-  ['criteria', 'criterion'],
-  ['phenomena', 'phenomenon'],
-  ['data', 'datum'],
-  ['cacti', 'cactus'],
-  ['fungi', 'fungus']
-]);
+const synonymGroups = [
+  ['big', 'large'],
+  ['buy', 'purchase'],
+  ['doctor', 'physician'],
+  ['gem', 'gemstone'],
+  ['make', 'produce'],
+  ['beauty', 'beautiful']
+];
 
+const synonyms = new Map(
+  synonymGroups.flatMap(group => group.map(word => [word, group[0]]))
+);
+
+const irregularRoots = new Map([
+  ['ran', 'run'],
+  ['made', 'make'],
+  ['bought', 'buy'],
+  ['went', 'go'],
+  ['gone', 'go'],
+  ['did', 'do'],
+  ['done', 'do'],
+  ['had', 'have']
+]);
 const invariantWords = new Set([
   'news', 'series', 'species', 'means', 'crossroads', 'headquarters',
   'mathematics', 'physics', 'economics', 'politics', 'athletics', 'measles'
 ]);
-
+const stopWords = new Set([
+  'a', 'an', 'the', 'of', 'in', 'on', 'at', 'to', 'from', 'by', 'for',
+  'and', 'or', 'but', 'through', 'with', 'as', 'this', 'that', 'these',
+  'those', 'it', 'its', 'there', 'here', 'which', 'who', 'whom', 'what',
+  'when', 'where', 'while', 'because', 'into', 'onto', 'about', 'over',
+  'under', 'after', 'before', 'than', 'then', 'also', 'very', 'more',
+  'most', 'some', 'any', 'each', 'every', 'all', 'both', 'their', 'his',
+  'her', 'our', 'your', 'my', 'me', 'you', 'we', 'they', 'he', 'she',
+  'i', 'us', 'them', 'him'
+]);
+const auxiliaryVerbs = new Set([
+  'be', 'am', 'is', 'are', 'was', 'were', 'been', 'being',
+  'do', 'does', 'did', 'have', 'has', 'had'
+]);
+const smallNumbers = new Map([
+  ['zero', 0], ['one', 1], ['two', 2], ['three', 3], ['four', 4],
+  ['five', 5], ['six', 6], ['seven', 7], ['eight', 8], ['nine', 9],
+  ['ten', 10], ['eleven', 11], ['twelve', 12], ['thirteen', 13],
+  ['fourteen', 14], ['fifteen', 15], ['sixteen', 16], ['seventeen', 17],
+  ['eighteen', 18], ['nineteen', 19]
+]);
+const tensNumbers = new Map([
+  ['twenty', 20], ['thirty', 30], ['forty', 40], ['fifty', 50],
+  ['sixty', 60], ['seventy', 70], ['eighty', 80], ['ninety', 90]
+]);
+const compoundPhrases = [
+  { words: ['water', 'fall'], value: 'waterfall' },
+  { words: ['well', 'being'], value: 'wellbeing' }
+];
+const meaningPhrases = [
+  { words: ['not', 'good'], value: 'bad' },
+  { words: ['united', 'nations'], value: 'un' },
+  ...compoundPhrases
+];
+const eStemWords = new Set([
+  'make', 'use', 'write', 'drive', 'take', 'give', 'come', 'live',
+  'produce', 'change', 'bake', 'move', 'create', 'dance'
+]);
+function expandContractions(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .toLowerCase()
+  .replace(/[’‘]/g, "'")
+  .replace(/\bcan't\b/g, 'can not')
+  .replace(/\bcannot\b/g, 'can not')
+  .replace(/\bwon't\b/g, 'will not')
+  .replace(/\bshan't\b/g, 'shall not')
+  .replace(/\bain't\b/g, 'is not')
+  .replace(/\b([a-z]+)n't\b/g, '$1 not')
+  .replace(/\b(i)'m\b/g, '$1 am')
+  .replace(/\b(you|we|they|he|she|it)'re\b/g, '$1 are')
+  .replace(/\b(i|you|we|they|he|she|it)'ve\b/g, '$1 have')
+  .replace(/\b(i|you|we|they|he|she|it)'ll\b/g, '$1 will')
+  .replace(/\b(i|you|he|she|it|we|they|that|there|who|what)'d\b/g, '$1 would')
+  .replace(/\b(it|he|she|that|there|who|what|where|when|how)'s\b/g, '$1 is')
+  .replace(/([\p{L}\p{N}])'s\b/gu, '$1')
+  .replace(/([\p{L}\p{N}])'(?=\s|$)/gu, '$1');
+}
 function tokenize(value) {
-  return String(value || '').normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
+  return expandContractions(value)
+    .replace(/[\p{Pd}]/gu, ' ')
+  .match(/[\p{L}\p{N}]+/gu) || [];
+}
+
+function numberSequence(tokens, start) {
+  let cursor = start;
+  let current = 0;
+  let total = 0;
+  let foundNumber = false;
+
+  while (cursor < tokens.length) {
+    const word = tokens[cursor];
+    if (smallNumbers.has(word)) {
+      current += smallNumbers.get(word);
+      foundNumber = true;
+      cursor++;
+    } else if (tensNumbers.has(word)) {
+      current += tensNumbers.get(word);
+      foundNumber = true;
+      cursor++;
+    } else if (word === 'hundred' && foundNumber) {
+      current = Math.max(1, current) * 100;
+      cursor++;
+    } else if (word === 'thousand' && foundNumber) {
+      total += Math.max(1, current) * 1000;
+      current = 0;
+      cursor++;
+    } else if (word === 'and' && foundNumber && cursor + 1 < tokens.length && smallNumbers.has(tokens[cursor + 1])) {
+      cursor++;
+    } else {
+      break;
+    }
+  }
+
+  return foundNumber ? { end: cursor, value: String(total + current) } : null;
+}
+
+function normalizeNumberWords(tokens) {
+  const normalized = [];
+  for (let index = 0; index < tokens.length;) {
+    const sequence = numberSequence(tokens, index);
+    if (sequence) {
+      normalized.push(sequence.value);
+      index = sequence.end;
+    } else {
+      normalized.push(tokens[index]);
+      index++;
+    }
+  }
+  return normalized;
+}
+
+function replacePhrases(tokens) {
+  const output = [];
+  for (let index = 0; index < tokens.length;) {
+    const phrase = meaningPhrases.find(candidate =>
+      candidate.words.every((word, offset) => tokens[index + offset] === word)
+    );
+    if (phrase) {
+      output.push(phrase.value);
+      index += phrase.words.length;
+    } else {
+      output.push(tokens[index]);
+      index++;
+    }
+  }
+  return output;
 }
 
 function normalizeSpelling(word) {
@@ -72,56 +199,101 @@ function normalizeSpelling(word) {
     .replace(/ll(?=(?:ed|ing|er|or|ation)$)/, 'l');
 }
 
-function singularForms(word) {
-  const forms = new Set([word]);
-  const irregular = irregularPlurals.get(word);
-  if (irregular) forms.add(irregular);
-  if (word.endsWith('ies') && word.length > 3) forms.add(`${word.slice(0, -3)}y`);
-  if (/(?:ches|shes|xes|zes|sses)$/.test(word)) forms.add(word.slice(0, -2));
-  if (word.endsWith('es') && word.length > 3) forms.add(word.slice(0, -2));
-  if (word.endsWith('ves')) {
-    forms.add(`${word.slice(0, -3)}f`);
-    forms.add(`${word.slice(0, -3)}fe`);
+function rootWord(word) {
+  const normalized = normalizeSpelling(word);
+  if (irregularRoots.has(normalized)) return irregularRoots.get(normalized);
+
+  if (normalized.endsWith('ies') && normalized.length > 4) return `${normalized.slice(0, -3)}y`;
+  if (normalized.endsWith('ied') && normalized.length > 4) return `${normalized.slice(0, -3)}y`;
+
+  if (normalized.endsWith('ing') && normalized.length > 5) {
+    let root = normalized.slice(0, -3);
+    if (/(.)\1$/.test(root)) root = root.slice(0, -1);
+    if (eStemWords.has(`${root}e`)) root = `${root}e`;
+    return root;
   }
-  if (word.endsWith('s') && !invariantWords.has(word) && !/(?:ss|us|is)$/.test(word)) forms.add(word.slice(0, -1));
-  return forms;
+
+  if (normalized.endsWith('ed') && normalized.length > 4) {
+    let root = normalized.slice(0, -2);
+    if (/(.)\1$/.test(root)) root = root.slice(0, -1);
+    if (eStemWords.has(`${root}e`)) root = `${root}e`;
+    return root;
+  }
+
+  if (normalized.endsWith('er') && normalized.length > 4) {
+    let root = normalized.slice(0, -2);
+    if (/(.)\1$/.test(root)) root = root.slice(0, -1);
+    if (eStemWords.has(`${root}e`)) root = `${root}e`;
+    return root;
+  }
+
+  if (normalized.endsWith('es') && normalized.length > 4 && /(?:ches|shes|xes|zes|sses)$/.test(normalized)) {
+    return normalized.slice(0, -2);
+  }
+  if (normalized.endsWith('s') && normalized.length > 3 && !invariantWords.has(normalized) && !/(?:ss|us|is)$/.test(normalized)) {
+    return normalized.slice(0, -1);
+  }
+
+  return normalized;
 }
 
-function wordForms(word) {
-  const forms = new Set();
-  for (const singular of singularForms(word)) {
-    const normalized = normalizeSpelling(singular);
-    forms.add(normalized);
-    const normalizedSingular = irregularPlurals.get(normalized);
-    if (normalizedSingular) forms.add(normalizedSingular);
-    for (const form of singularForms(normalized)) forms.add(form);
-  }
-  return forms;
+function canonicalizeTokens(tokens) {
+  const numbered = normalizeNumberWords(tokens);
+  const phrasesReplaced = replacePhrases(numbered);
+  const compoundsReplaced = replacePhrases(phrasesReplaced);
+  return compoundsReplaced.map(word => {
+    const root = rootWord(word);
+    return synonyms.get(root) || root;
+  });
 }
 
-function wordsMatch(expectedWord, studentWord) {
-  const expectedForms = wordForms(expectedWord);
-  return [...wordForms(studentWord)].some(form => expectedForms.has(form));
+function normalizeAnswerTokens(value) {
+  const tokens = canonicalizeTokens(tokenize(value));
+  const contentWords = tokens.filter(word => !stopWords.has(word) && !auxiliaryVerbs.has(word));
+  return contentWords.length ? contentWords : tokens;
+}
+
+function overlapCount(expected, response) {
+  const available = new Map();
+  response.forEach(word => available.set(word, (available.get(word) || 0) + 1));
+  let matched = 0;
+  expected.forEach(word => {
+    const count = available.get(word) || 0;
+    if (count > 0) {
+      matched++;
+      available.set(word, count - 1);
+    }
+  });
+  return matched;
+}
+
+function expectedGroups(expectedAnswer) {
+  return String(expectedAnswer || '').split(';').map(group =>
+    group.split('/').map(normalizeAnswerTokens).filter(words => words.length)
+  ).filter(alternatives => alternatives.length);
+}
+
+export function shortAnswerMatchScore(expectedAnswer, studentResponse) {
+  const responseWords = normalizeAnswerTokens(studentResponse);
+  const groups = expectedGroups(expectedAnswer);
+  if (!responseWords.length || !groups.length) return 0;
+
+  let totalMatched = 0;
+  let totalExpected = 0;
+
+  groups.forEach(alternatives => {
+    const best = alternatives
+      .map(words => ({ words, matched: overlapCount(words, responseWords) }))
+      .sort((left, right) => right.matched / right.words.length - left.matched / left.words.length)[0];
+    totalMatched += best.matched;
+    totalExpected += best.words.length;
+  });
+
+  const similarity = totalExpected ? totalMatched / totalExpected : 0;
+  if (similarity === 1) return 1;
+  return similarity >= 0.8 ? 0.5 : 0;
 }
 
 export function shortAnswerMatches(expectedAnswer, studentResponse) {
-  const expectedText = String(expectedAnswer || '');
-  const studentWords = tokenize(studentResponse);
-  if (!studentWords.length) return false;
-
-  if (expectedText.includes(';')) {
-    const requiredWords = expectedText.split(';').flatMap(tokenize);
-    return requiredWords.length > 0 && requiredWords.every(expectedWord =>
-      studentWords.some(studentWord => wordsMatch(expectedWord, studentWord))
-    );
-  }
-
-  const expectedWords = tokenize(expectedText);
-  if (!expectedWords.length || expectedWords.length > studentWords.length) return false;
-
-  for (let start = 0; start <= studentWords.length - expectedWords.length; start++) {
-    const phraseMatches = expectedWords.every((word, offset) => wordsMatch(word, studentWords[start + offset]));
-    if (phraseMatches) return true;
-  }
-  return false;
+  return shortAnswerMatchScore(expectedAnswer, studentResponse) === 1;
 }

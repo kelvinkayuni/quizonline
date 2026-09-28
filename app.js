@@ -3,7 +3,7 @@ function studentCourseDetails() { const courseName = courseDisplayValue(state.co
 import { supabase } from './supabase.js';
 import { deleteQuizAttempts, hydrateQuizState, persistQuizState } from './supabaseStore.js';
 import { loadLiveStudentUsernames, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
-import { shortAnswerMatches } from './shortAnswerMatching.js';
+import { shortAnswerMatchScore } from './shortAnswerMatching.js';
 
 async function refreshStudentQuizState() {
   if (!session || session.role !== 'student') return;
@@ -594,15 +594,20 @@ function finalizeStudentResult(studentSession, autoSubmitted) {
   let totalMarks = 0;
   let incorrect = 0;
   let correct = 0;
+  let partial = 0;
 
   quizQuestions.forEach(question => {
-    totalMarks += Number(question.marks) || 0;
+    const questionMarks = Number(question.marks) || 0;
+    totalMarks += questionMarks;
     const answer = answersById[question.id];
-    if (answer?.correct) {
-      score += Number(question.marks) || 0;
-      correct++;
-    }
-    if (answer && !answer.correct) incorrect++;
+    const savedMarks = Number(answer?.marksAwarded);
+    const marksAwarded = answer && Number.isFinite(savedMarks)
+      ? Math.min(questionMarks, Math.max(0, savedMarks))
+      : answer?.correct ? questionMarks : 0;
+    score += marksAwarded;
+    if (answer?.correct) correct++;
+    else if (answer?.partial || marksAwarded > 0) partial++;
+    else if (answer) incorrect++;
   });
 
   const result = {
@@ -612,6 +617,7 @@ function finalizeStudentResult(studentSession, autoSubmitted) {
     attempted: (studentSession.answers || []).length,
     correct,
     incorrect,
+    partial,
     score,
     totalMarks,
     percentage: totalMarks ? Math.round(score / totalMarks * 100) : 0,
@@ -717,6 +723,10 @@ studentApp = function studentViewWithShortAnswer() {
   const response = String(session.response || '');
   const responseMarkup = `<div class="answers"><div class="field full"><label for="short-answer-response">Your answer</label><textarea id="short-answer-response" placeholder="Type your answer..." ${session.feedback ? 'disabled' : ''}>${esc(response)}</textarea></div></div>`;
   markup = markup.replace(/<div class="answers">[\s\S]*?<\/div>/, responseMarkup);
+  if (session.feedback?.partial) {
+    const marksAwarded = Number(session.feedback.marksAwarded).toFixed(2).replace(/\.?0+$/, '');
+    markup = markup.replace(/<div class="feedback [^"]*">[\s\S]*?<\/div>/, `<div class="feedback correct">Partially correct. ${marksAwarded} of ${question.marks} marks awarded.</div>`);
+  }
   if (response.trim() && !session.feedback) markup = markup.replace('data-action="submit-answer" disabled', 'data-action="submit-answer"');
   return markup;
 };
@@ -736,9 +746,12 @@ submitAnswer = function submitTypedOrMultipleChoiceAnswer() {
   if (state.quizStopped || quizHasEnded() || session.quizId !== state.currentQuizId) return showToast('This quiz is no longer active.');
   const response = String(session.response || '').trim();
   if (!response) return;
-  const correct = shortAnswerMatches(question.answer, response);
-  session.feedback = { correct };
-  session.answers.push({ questionId: question.id, selected: response, correct });
+  const credit = shortAnswerMatchScore(question.answer, response);
+  const correct = credit === 1;
+  const partial = credit === 0.5;
+  const marksAwarded = (Number(question.marks) || 1) * credit;
+  session.feedback = { correct, partial, marksAwarded };
+  session.answers.push({ questionId: question.id, selected: response, correct, partial, marksAwarded });
   saveStudentSession();
   app();
 };
