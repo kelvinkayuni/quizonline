@@ -3,6 +3,7 @@ function studentCourseDetails() { const courseName = courseDisplayValue(state.co
 import { supabase } from './supabase.js';
 import { deleteQuizAttempts, hydrateQuizState, persistQuizState } from './supabaseStore.js';
 import { loadLiveStudentUsernames, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
+import { shortAnswerMatches } from './shortAnswerMatching.js';
 
 async function refreshStudentQuizState() {
   if (!session || session.role !== 'student') return;
@@ -735,7 +736,7 @@ submitAnswer = function submitTypedOrMultipleChoiceAnswer() {
   if (state.quizStopped || quizHasEnded() || session.quizId !== state.currentQuizId) return showToast('This quiz is no longer active.');
   const response = String(session.response || '').trim();
   if (!response) return;
-  const correct = response.toLowerCase() === String(question.answer || '').trim().toLowerCase();
+  const correct = shortAnswerMatches(question.answer, response);
   session.feedback = { correct };
   session.answers.push({ questionId: question.id, selected: response, correct });
   saveStudentSession();
