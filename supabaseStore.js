@@ -80,6 +80,7 @@ function normalizeAttempt(row) {
 }
 
 export async function hydrateQuizState(state, role = 'teacher', persist = true, username = '') {
+  const preservePendingQuestions = role === 'teacher' && Boolean(state.pendingQuestionSync);
   let questionsResult;
   let configResult;
   let attemptsResult;
@@ -104,7 +105,7 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true, 
     return;
   }
 
-  if (!questionsResult.error) {
+  if (!questionsResult.error && !preservePendingQuestions) {
     state.questions = questionsResult.data.map(normalizeQuestion);
   } else {
     reportError('question loading', questionsResult.error);
@@ -152,7 +153,7 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true, 
     state.healthClearedAt = workspace.healthClearedAt || null;
     state.configResetAt = workspace.configResetAt || state.configResetAt || '';
     if (state.configResetAt && state.configResetAt !== previousConfigResetAt) delete state.drafts.config;
-    if (workspace.currentQuizQuestions?.quizId === state.currentQuizId && Array.isArray(workspace.currentQuizQuestions.questions)) {
+    if (!preservePendingQuestions && workspace.currentQuizQuestions?.quizId === state.currentQuizId && Array.isArray(workspace.currentQuizQuestions.questions)) {
       state.questions = workspace.currentQuizQuestions.questions.map(normalizeQuestion);
     }
     if (storedResultFiles.some(file => Array.isArray(file.questions))) {

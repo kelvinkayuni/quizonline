@@ -228,7 +228,7 @@ function loadState() {
   } catch { return structuredClone(defaultState); }
 }
 function stateForLocalStorage() { if (session?.role !== 'student') return state; return { ...state, results: [], studentHistory: [], resultFiles: [] }; }
-function saveState(options = {}) { localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage())); persistQuizState(state, session?.role, options); }
+function saveState(options = {}) { localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage())); return persistQuizState(state, session?.role, options); }
 function restoreState(snapshot) { state = snapshot; localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
 function saveTeacherDraft(form) { const values = {}; form.querySelectorAll('input, textarea, select').forEach(field => { if (!field.name) return; if (values[field.name] === undefined) values[field.name] = field.value; else values[field.name] = Array.isArray(values[field.name]) ? [...values[field.name], field.value] : [values[field.name], field.value]; }); state.drafts[teacherView] = values; saveState(); }
 function restoreTeacherDrafts() { const draft = state.drafts[teacherView]; if (!draft) return; document.querySelectorAll('#question-form input, #question-form textarea, #question-form select, #config-form input, #config-form select').forEach(field => { const stored = draft[field.name]; if (stored === undefined) return; const index = [...document.querySelectorAll(`[name="${field.name}"]`)].indexOf(field); field.value = Array.isArray(stored) ? (stored[index] || '') : stored; }); }
@@ -371,7 +371,7 @@ function bindEvents() { applyBranding(); const totalQuestionsField = document.qu
   clearInterval(studentHeartbeatTimer);
   clearInterval(studentQuizRefreshTimer);
   if (session?.role === 'teacher') {
-    liveRefreshTimer = setInterval(async () => { if (teacherMutationInFlight || (teacherView === 'questions' && document.querySelector('#question-form'))) return; await refreshTeacherQuizState(); await hydrateQuizState(state, 'teacher', false); cacheHydratedState(); await refreshLiveStudents(); if (!teacherMutationInFlight && !document.activeElement?.closest('form')) app(); }, 5000);
+    liveRefreshTimer = setInterval(async () => { if (teacherMutationInFlight || state.pendingQuestionSync || (teacherView === 'questions' && document.querySelector('#question-form'))) return; await refreshTeacherQuizState(); await hydrateQuizState(state, 'teacher', false); cacheHydratedState(); await refreshLiveStudents(); if (!teacherMutationInFlight && !document.activeElement?.closest('form')) app(); }, 5000);
     if (state.questionsPublished && !state.quizStopped && state.config.end) {
       teacherDeadlineTimer = setInterval(() => { if (quizHasEnded()) void expireQuizDueToTime(); }, 1000);
     }
@@ -686,7 +686,7 @@ questionsView = function questionBankWithShortAnswers() {
   return markup.replace('</form></div><div class="card panel">', `</form>${shortAnswerForm}</div><div class="card panel">`);
 };
 
-function saveShortAnswerQuestion(event) {
+async function saveShortAnswerQuestion(event) {
   event.preventDefault();
   if (quizIsLocked()) return showToast('Stop the quiz before changing questions.');
   const data = new FormData(event.target);
@@ -700,11 +700,19 @@ function saveShortAnswerQuestion(event) {
   else state.questions.push(question);
   state.questionsPublished = false;
   state.studentSessions = {};
+  state.pendingQuestionSync = true;
   delete state.drafts.questions;
   editingQuestionId = null;
   addActivity(existingIndex >= 0 ? 'A saved question was updated' : 'A new short answer question was added', 'question');
-  saveState({ skipConfig: true });
-  showToast(existingIndex >= 0 ? 'Question updated. Submit questions again to publish changes.' : 'Short answer question saved to the bank.');
+  try {
+    await saveState({ skipConfig: true, waitForSync: true });
+    state.pendingQuestionSync = false;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+    showToast(existingIndex >= 0 ? 'Question updated. Submit questions again to publish changes.' : 'Short answer question saved to the bank.');
+  } catch (error) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+    showToast(`Question is saved on this device but could not sync to Supabase: ${error.message || error}`, 'error');
+  }
   app();
 }
 
