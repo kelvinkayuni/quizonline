@@ -99,16 +99,28 @@ function wordForms(word) {
   return forms;
 }
 
+function wordsMatch(expectedWord, studentWord) {
+  const expectedForms = wordForms(expectedWord);
+  return [...wordForms(studentWord)].some(form => expectedForms.has(form));
+}
+
 export function shortAnswerMatches(expectedAnswer, studentResponse) {
-  const expectedWords = tokenize(expectedAnswer);
+  const expectedText = String(expectedAnswer || '');
   const studentWords = tokenize(studentResponse);
+  if (!studentWords.length) return false;
+
+  if (expectedText.includes(';')) {
+    const requiredWords = expectedText.split(';').flatMap(tokenize);
+    return requiredWords.length > 0 && requiredWords.every(expectedWord =>
+      studentWords.some(studentWord => wordsMatch(expectedWord, studentWord))
+    );
+  }
+
+  const expectedWords = tokenize(expectedText);
   if (!expectedWords.length || expectedWords.length > studentWords.length) return false;
 
-  const expectedForms = expectedWords.map(wordForms);
   for (let start = 0; start <= studentWords.length - expectedWords.length; start++) {
-    const phraseMatches = expectedForms.every((forms, offset) =>
-      [...wordForms(studentWords[start + offset])].some(form => forms.has(form))
-    );
+    const phraseMatches = expectedWords.every((word, offset) => wordsMatch(word, studentWords[start + offset]));
     if (phraseMatches) return true;
   }
   return false;
