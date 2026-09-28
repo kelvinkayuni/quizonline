@@ -293,7 +293,14 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
     const savedIds = new Set();
     let questionSyncFailed = false;
     for (const question of state.questions) {
-      const payload = { text: question.text, choices: question.choices, correct: question.correct, marks: question.marks };
+      const payload = {
+        text: question.text,
+        type: question.type || 'multiple-choice',
+        choices: question.choices,
+        correct: question.correct,
+        answer: question.answer || null,
+        marks: question.marks
+      };
       let result;
       for (let attempt = 0; attempt < 3; attempt++) {
         result = isUuid(question.id)

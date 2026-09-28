@@ -602,7 +602,7 @@ function finalizeStudentResult(studentSession, autoSubmitted) {
     const answer = answersById[question.id];
     const savedMarks = Number(answer?.marksAwarded);
     const marksAwarded = answer && Number.isFinite(savedMarks)
-      ? Math.min(questionMarks, Math.max(0, savedMarks))
+      ? Math.min(questionMarks, Math.max(0, Math.round(savedMarks)))
       : answer?.correct ? questionMarks : 0;
     score += marksAwarded;
     if (answer?.correct) correct++;
@@ -758,7 +758,7 @@ submitAnswer = function submitTypedOrMultipleChoiceAnswer() {
   const credit = shortAnswerMatchScore(question.answer, response, question.rubric);
   const correct = credit === 1;
   const partial = credit === 0.5;
-  const marksAwarded = (Number(question.marks) || 1) * credit;
+  const marksAwarded = Math.round((Number(question.marks) || 1) * credit);
   session.feedback = { correct, partial, marksAwarded };
   session.answers.push({ questionId: question.id, selected: response, correct, partial, marksAwarded });
   saveStudentSession();
