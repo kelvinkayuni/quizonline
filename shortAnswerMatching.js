@@ -59,6 +59,11 @@ const invariantWords = new Set([
   'news', 'series', 'species', 'means', 'crossroads', 'headquarters',
   'mathematics', 'physics', 'economics', 'politics', 'athletics', 'measles'
 ]);
+const negationWords = new Set([
+  'not', 'never', 'no', 'none', 'cannot', 'cant', 'dont', 'doesnt', 'didnt',
+  'isnt', 'arent', 'wasnt', 'werent', 'havent', 'hasnt', 'hadnt', 'without',
+  'lack', 'lacks', 'lacking'
+]);
 const stopWords = new Set([
   'a', 'an', 'the', 'of', 'in', 'on', 'at', 'to', 'from', 'by', 'for',
   'and', 'or', 'but', 'through', 'with', 'as', 'this', 'that', 'these',
@@ -249,21 +254,65 @@ function canonicalizeTokens(tokens) {
 
 function normalizeAnswerTokens(value) {
   const tokens = canonicalizeTokens(tokenize(value));
-  const contentWords = tokens.filter(word => !stopWords.has(word) && !auxiliaryVerbs.has(word));
-  return contentWords.length ? contentWords : tokens;
+  const normalized = [];
+  let negated = false;
+
+  for (const word of tokens) {
+    if (negationWords.has(word)) {
+      negated = true;
+      continue;
+    }
+
+    const baseWord = word.replace(/^neg_/, '');
+    if (baseWord && !stopWords.has(baseWord) && !auxiliaryVerbs.has(baseWord)) {
+      normalized.push(negated ? `neg_${baseWord}` : baseWord);
+    } else if (baseWord) {
+      normalized.push(negated ? `neg_${baseWord}` : baseWord);
+    }
+    negated = false;
+  }
+
+  return normalized.length ? normalized : tokens;
+}
+
+function orderedPhraseMatch(expected, response) {
+  if (!expected.length || !response.length || expected.length === 1) return false;
+
+  let expectedIndex = 0;
+  for (const word of response) {
+    if (word === expected[expectedIndex]) {
+      expectedIndex += 1;
+      if (expectedIndex === expected.length) return true;
+    }
+  }
+
+  return false;
 }
 
 function overlapCount(expected, response) {
   const available = new Map();
   response.forEach(word => available.set(word, (available.get(word) || 0) + 1));
   let matched = 0;
+
   expected.forEach(word => {
+    const baseWord = word.replace(/^neg_/, '');
     const count = available.get(word) || 0;
-    if (count > 0) {
+    const negatedCount = available.get(`neg_${baseWord}`) || 0;
+
+    if (word.startsWith('neg_')) {
+      if (count > 0) {
+        matched++;
+        available.set(word, count - 1);
+      }
+    } else if (count > 0) {
       matched++;
       available.set(word, count - 1);
+    } else if (negatedCount > 0) {
+      // A negated concept directly blocks the positive concept.
+      available.set(`neg_${baseWord}`, negatedCount - 1);
     }
   });
+
   return matched;
 }
 
@@ -283,7 +332,13 @@ export function shortAnswerMatchScore(expectedAnswer, studentResponse) {
 
   groups.forEach(alternatives => {
     const best = alternatives
-      .map(words => ({ words, matched: overlapCount(words, responseWords) }))
+      .map(words => {
+        const orderedMatch = orderedPhraseMatch(words, responseWords);
+        return {
+          words,
+          matched: orderedMatch ? words.length : overlapCount(words, responseWords)
+        };
+      })
       .sort((left, right) => right.matched / right.words.length - left.matched / left.words.length)[0];
     totalMatched += best.matched;
     totalExpected += best.words.length;
