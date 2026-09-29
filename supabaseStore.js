@@ -6,6 +6,7 @@ let pendingState = null;
 let pendingOptions = {};
 let syncTimer = null;
 let syncResolvers = [];
+const questionIdAliases = new Map();
 const SUPABASE_REQUEST_TIMEOUT = 30000;
 
 function withTimeout(request, operation) {
@@ -78,7 +79,48 @@ function normalizeAttempt(row) {
   };
 }
 
+function sameQuestionRow(left, right) {
+  return left.text === right.text
+    && Number(left.correct) === Number(right.correct)
+    && Number(left.marks) === Number(right.marks)
+    && JSON.stringify(left.choices || []) === JSON.stringify(right.choices || []);
+}
+
+function mergeUnconfirmedLocalQuestions(savedQuestions, localQuestions) {
+  const merged = savedQuestions.map(question => ({ ...question }));
+  const claimedIndexes = new Set();
+
+  localQuestions.forEach(localQuestion => {
+    const index = merged.findIndex((savedQuestion, savedIndex) =>
+      !claimedIndexes.has(savedIndex)
+      && (savedQuestion.id === localQuestion.id
+        || savedQuestion.id === localQuestion.localId
+        || sameQuestionRow(savedQuestion, localQuestion))
+    );
+
+    if (index < 0) {
+      merged.push({ ...localQuestion });
+      return;
+    }
+
+    const savedQuestion = merged[index];
+    claimedIndexes.add(index);
+    localQuestion.id = savedQuestion.id;
+    merged[index] = { ...savedQuestion, ...localQuestion, id: savedQuestion.id };
+  });
+
+  return merged;
+}
+
+function questionForWorkspace(question) {
+  const { localId, syncVersion, syncStatus, syncError, ...savedQuestion } = question;
+  return savedQuestion;
+}
+
 export async function hydrateQuizState(state, role = 'teacher', persist = true, username = '') {
+  const unconfirmedLocalQuestions = role === 'teacher'
+    ? state.questions.filter(question => question.syncStatus === 'pending' || question.syncStatus === 'failed')
+    : [];
   let questionsResult;
   let configResult;
   let attemptsResult;
@@ -104,7 +146,10 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true, 
   }
 
   if (!questionsResult.error) {
-    state.questions = questionsResult.data.map(normalizeQuestion);
+    state.questions = mergeUnconfirmedLocalQuestions(
+      questionsResult.data.map(normalizeQuestion),
+      unconfirmedLocalQuestions
+    );
   } else {
     reportError('question loading', questionsResult.error);
   }
@@ -162,7 +207,10 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true, 
       });
     }
     if (workspace.currentQuizQuestions?.quizId === state.currentQuizId && Array.isArray(snapshotQuestions)) {
-      state.questions = snapshotQuestions.map(normalizeQuestion);
+      state.questions = mergeUnconfirmedLocalQuestions(
+        snapshotQuestions.map(normalizeQuestion),
+        unconfirmedLocalQuestions
+      );
     }
     if (storedResultFiles.some(file => Array.isArray(file.questions))) {
       const cleanupResult = await supabase.from('quiz_workspace').update({ data: { ...workspace, resultFiles: cleanedResultFiles }, updated_at: new Date().toISOString() }).eq('id', 1);
@@ -198,6 +246,92 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true, 
 
   persistenceEnabled = true;
   if (persist) await persistQuizState(state, role);
+}
+
+export function persistQuestionToSupabase(state, localId) {
+  const operation = syncQueue.then(async () => {
+    const question = state.questions.find(item => item.localId === localId || item.id === localId);
+    if (!question) throw new Error('The locally saved question could not be found for synchronization.');
+
+    const questionForSync = { ...question };
+    const remoteId = questionIdAliases.get(localId) || (isUuid(questionForSync.id) ? questionForSync.id : null);
+    const payload = {
+      text: questionForSync.text,
+      choices: questionForSync.choices || [],
+      correct: questionForSync.correct,
+      marks: questionForSync.marks
+    };
+    let result = remoteId
+      ? await withTimeout(supabase.from('questions').update(payload).eq('id', remoteId).select('id').maybeSingle(), 'Question synchronization')
+      : await withTimeout(supabase.from('questions').insert(payload).select('id').maybeSingle(), 'Question synchronization');
+    if (result.error) throw result.error;
+    if (!result.data?.id && remoteId) {
+      result = await withTimeout(supabase.from('questions').insert(payload).select('id').maybeSingle(), 'Question recovery');
+      if (result.error) throw result.error;
+    }
+
+    const savedId = result.data?.id;
+    if (!savedId) throw new Error('Supabase did not return a saved question ID.');
+    question.id = savedId;
+    questionIdAliases.set(localId, savedId);
+    questionForSync.id = savedId;
+
+    const workspaceResult = await withTimeout(
+      supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle(),
+      'Question-bank workspace loading'
+    );
+    if (workspaceResult.error) throw workspaceResult.error;
+
+    const workspace = workspaceResult.data?.data || {};
+    const currentSnapshot = workspace.currentQuizQuestions;
+    const savedQuestions = Array.isArray(currentSnapshot?.questions)
+      ? currentSnapshot.questions.map(item => ({ ...item }))
+      : [];
+    const savedQuestion = questionForWorkspace(questionForSync);
+    const snapshotIndex = savedQuestions.findIndex(item =>
+      item.id === savedId || item.id === localId || item.localId === localId || sameQuestionRow(item, savedQuestion)
+    );
+    if (snapshotIndex >= 0) savedQuestions[snapshotIndex] = savedQuestion;
+    else savedQuestions.push(savedQuestion);
+
+    const updatedWorkspace = await withTimeout(supabase.from('quiz_workspace').upsert({
+      id: 1,
+      data: {
+        ...workspace,
+        courseName: state.config.courseName || '',
+        courseCode: state.config.courseCode || '',
+        currentQuizQuestions: {
+          quizId: state.currentQuizId,
+          questions: savedQuestions.map(questionForWorkspace)
+        },
+        activity: state.activity
+      },
+      updated_at: new Date().toISOString()
+    }), 'Question-bank snapshot synchronization');
+    if (updatedWorkspace.error) throw updatedWorkspace.error;
+
+    const [verifiedRow, verifiedWorkspace] = await Promise.all([
+      withTimeout(supabase.from('questions').select('id, text, choices, correct, marks').eq('id', savedId).maybeSingle(), 'Question save confirmation'),
+      withTimeout(supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle(), 'Question snapshot confirmation')
+    ]);
+    if (verifiedRow.error) throw verifiedRow.error;
+    if (verifiedWorkspace.error) throw verifiedWorkspace.error;
+
+    const verifiedSnapshot = verifiedWorkspace.data?.data?.currentQuizQuestions;
+    const verifiedQuestion = verifiedSnapshot?.quizId === state.currentQuizId && Array.isArray(verifiedSnapshot.questions)
+      ? verifiedSnapshot.questions.find(item => item.id === savedId)
+      : null;
+    if (!verifiedRow.data || !sameQuestionRow(verifiedRow.data, questionForSync)
+      || !verifiedQuestion || !sameQuestionRow(verifiedQuestion, questionForSync)
+      || verifiedQuestion.type !== questionForSync.type
+      || String(verifiedQuestion.answer || '') !== String(questionForSync.answer || '')) {
+      throw new Error('Supabase did not confirm the saved question in the question bank.');
+    }
+
+    return savedId;
+  });
+  syncQueue = operation.catch(() => {});
+  return operation;
 }
 
 export function persistQuizState(state, role = 'teacher', options = {}) {
@@ -379,7 +513,7 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
     }
     const questionSnapshot = {
       quizId: stateToPersist.currentQuizId,
-      questions: stateToPersist.questions.map(question => ({ ...question }))
+      questions: stateToPersist.questions.map(questionForWorkspace)
     };
     const workspaceResult = await supabase.from('quiz_workspace').upsert({
       id: 1,

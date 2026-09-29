@@ -1,7 +1,7 @@
 function courseDisplayValue(value) { const normalized = String(value || '').trim(); return normalized === '34' || normalized.toLowerCase() === 'course' ? '' : normalized; }
 function studentCourseDetails() { const courseName = courseDisplayValue(state.config.courseName); const courseCode = courseDisplayValue(state.config.courseCode); return courseName || courseCode ? `<div class="course-banner">${courseName ? `<strong>${esc(courseName)}</strong>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''; }
 import { supabase } from './supabase.js';
-import { deleteQuizAttempts, hydrateQuizState, persistQuizState } from './supabaseStore.js';
+import { deleteQuizAttempts, hydrateQuizState, persistQuestionToSupabase, persistQuizState } from './supabaseStore.js';
 import { loadLiveStudentUsernames, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { shortAnswerMatchScore } from './shortAnswerMatching.js';
 
@@ -228,9 +228,9 @@ function loadState() {
   } catch { return structuredClone(defaultState); }
 }
 function stateForLocalStorage() { if (session?.role !== 'student') return state; return { ...state, results: [], studentHistory: [], resultFiles: [] }; }
-function saveState(options = {}) { localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage())); persistQuizState(state, session?.role, options); }
+function saveState(options = {}) { localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage())); if (!options.localOnly) persistQuizState(state, session?.role, options); }
 function restoreState(snapshot) { state = snapshot; localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
-function saveTeacherDraft(form) { const values = {}; form.querySelectorAll('input, textarea, select').forEach(field => { if (!field.name) return; if (values[field.name] === undefined) values[field.name] = field.value; else values[field.name] = Array.isArray(values[field.name]) ? [...values[field.name], field.value] : [values[field.name], field.value]; }); state.drafts[teacherView] = values; saveState(); }
+function saveTeacherDraft(form) { const values = {}; form.querySelectorAll('input, textarea, select').forEach(field => { if (!field.name) return; if (values[field.name] === undefined) values[field.name] = field.value; else values[field.name] = Array.isArray(values[field.name]) ? [...values[field.name], field.value] : [values[field.name], field.value]; }); state.drafts[teacherView] = values; saveState({ localOnly: form.id === 'question-form' || form.id === 'short-answer-form' }); }
 function restoreTeacherDrafts() { const draft = state.drafts[teacherView]; if (!draft) return; document.querySelectorAll('#question-form input, #question-form textarea, #question-form select, #config-form input, #config-form select').forEach(field => { const stored = draft[field.name]; if (stored === undefined) return; const index = [...document.querySelectorAll(`[name="${field.name}"]`)].indexOf(field); field.value = Array.isArray(stored) ? (stored[index] || '') : stored; }); }
 function saveStudentSession() { if (session?.role === 'student' && !session.completed) { state.studentSessions[session.username] = { ...session }; saveState(); } }
 function clearStudentSession(username) { delete state.studentSessions[username]; saveState(); }
@@ -379,8 +379,8 @@ function bindEvents() { applyBranding(); const totalQuestionsField = document.qu
   const courseForm = document.querySelector('#question-form');
   if (courseForm && !courseForm.querySelector('[name="courseName"]')) {
     courseForm.insertAdjacentHTML('afterbegin', `<div class="form-grid"><div class="field"><label>Course name</label><input name="courseName" value="${esc(courseDisplayValue(state.config.courseName))}" placeholder="e.g. Mathematics" /></div><div class="field"><label>Course code</label><input name="courseCode" value="${esc(courseDisplayValue(state.config.courseCode))}" placeholder="e.g. MAT 101" /></div></div>`);
-    courseForm.addEventListener('input', () => { state.config.courseName = courseForm.elements.courseName.value.trim(); state.config.courseCode = courseForm.elements.courseCode.value.trim(); saveState(); }, true);
-    courseForm.addEventListener('submit', () => { state.config.courseName = courseForm.elements.courseName.value.trim(); state.config.courseCode = courseForm.elements.courseCode.value.trim(); saveState(); }, true);
+    courseForm.addEventListener('input', () => { state.config.courseName = courseForm.elements.courseName.value.trim(); state.config.courseCode = courseForm.elements.courseCode.value.trim(); saveState({ localOnly: true }); }, true);
+    courseForm.addEventListener('submit', () => { state.config.courseName = courseForm.elements.courseName.value.trim(); state.config.courseCode = courseForm.elements.courseCode.value.trim(); saveState({ localOnly: true }); }, true);
   }
   if (session?.role === 'teacher' && teacherView === 'questions' && !document.querySelector('#question-list .course-banner') && (state.config.courseName || state.config.courseCode)) {
     document.querySelector('#question-list')?.insertAdjacentHTML('beforebegin', studentCourseDetails());
@@ -500,14 +500,13 @@ async function confirmMultipleChoiceQuestionSaved(question) {
 async function saveQuestion(event) {
   event.preventDefault();
   if (quizIsLocked()) return showToast('Stop the quiz before changing questions.');
-  if (teacherMutationInFlight) return;
 
   const data = new FormData(event.target);
   const choices = [...event.target.querySelectorAll('input[name="choice"]')]
     .map(input => input.value.trim())
     .filter(Boolean);
   const correct = Math.min(Number(data.get('correct')), choices.length - 1);
-  const id = data.get('id') || `q${Date.now()}`;
+  const id = data.get('id') || `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const question = {
     id,
     text: String(data.get('text') || '').trim(),
@@ -515,55 +514,59 @@ async function saveQuestion(event) {
     correct,
     marks: Number(data.get('marks')) || 1
   };
-  const previousState = {
-    questions: structuredClone(state.questions),
-    config: structuredClone(state.config),
-    questionsPublished: state.questionsPublished,
-    studentSessions: structuredClone(state.studentSessions),
-    activity: structuredClone(state.activity),
-    drafts: structuredClone(state.drafts),
-    editingQuestionId
-  };
-  const existingIndex = state.questions.findIndex(item => item.id === id);
-  teacherMutationInFlight = true;
+  state.config.courseName = String(data.get('courseName') ?? '').trim();
+  state.config.courseCode = String(data.get('courseCode') ?? '').trim();
+  saveQuestionLocally(question);
+}
 
+function saveQuestionLocally(question) {
+  const existingIndex = state.questions.findIndex(item => item.id === question.id);
+  const existing = existingIndex >= 0 ? state.questions[existingIndex] : null;
+  const localId = existing?.localId || existing?.id || question.id;
+  const version = (existing?.syncVersion || 0) + 1;
+  const savedLocally = { ...question, localId, syncVersion: version, syncStatus: 'pending', syncError: '' };
+  if (existingIndex >= 0) state.questions[existingIndex] = savedLocally;
+  else state.questions.push(savedLocally);
+
+  const questionNumber = String((existingIndex >= 0 ? existingIndex : state.questions.length - 1) + 1).padStart(2, '0');
+  state.questionsPublished = false;
+  state.studentSessions = {};
+  delete state.drafts.questions;
+  editingQuestionId = null;
+  state.activity.unshift({
+    text: `${existing ? 'A saved question was updated' : 'A new question was added'} (${questionNumber})`,
+    type: 'question',
+    time: new Date().toISOString()
+  });
+  state.activity = state.activity.slice(0, 20);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+  app();
+  void syncQuestionInBackground(localId, version, questionNumber);
+}
+
+async function syncQuestionInBackground(localId, version, questionNumber) {
   try {
-    state.config.courseName = String(data.get('courseName') ?? '').trim();
-    state.config.courseCode = String(data.get('courseCode') ?? '').trim();
-    if (existingIndex >= 0) state.questions[existingIndex] = question;
-    else state.questions.push(question);
-    state.questionsPublished = false;
-    state.studentSessions = {};
-    state.activity.unshift({
-      text: existingIndex >= 0 ? 'A saved question was updated' : 'A new question was added',
-      type: 'question',
-      time: new Date().toISOString()
-    });
-    state.activity = state.activity.slice(0, 20);
+    const savedId = await persistQuestionToSupabase(state, localId);
+    const question = state.questions.find(item => item.localId === localId || item.id === localId);
+    if (!question) return;
+    question.id = savedId;
+    if (question.syncVersion !== version) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+      return;
+    }
+    question.syncStatus = 'saved';
+    question.syncError = '';
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
-
-    await persistQuizState(state, 'teacher', { skipConfig: true, waitForSync: true });
-    await confirmMultipleChoiceQuestionSaved(question);
-
-    delete state.drafts.questions;
-    editingQuestionId = null;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
-    showToast(existingIndex >= 0 ? 'Question updated and confirmed in the question bank.' : 'Question saved and confirmed in the question bank.');
+    showToast(`Q${questionNumber} successfully saved to question bank.`);
   } catch (error) {
-    state.questions = previousState.questions;
-    state.config = previousState.config;
-    state.questionsPublished = previousState.questionsPublished;
-    state.studentSessions = previousState.studentSessions;
-    state.activity = previousState.activity;
-    state.drafts = previousState.drafts;
-    editingQuestionId = previousState.editingQuestionId;
+    const question = state.questions.find(item => item.localId === localId || item.id === localId);
+    if (!question || question.syncVersion !== version) return;
+    question.syncStatus = 'failed';
+    question.syncError = error.message || String(error);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
-    void persistQuizState(state, 'teacher', { skipConfig: true });
-    showToast(`Question was not confirmed saved: ${error.message || error}`, 'error');
-  } finally {
-    teacherMutationInFlight = false;
-    app();
+    showToast(`Q${questionNumber} failed to save to Supabase. It remains saved locally; edit and retry.`, 'error');
   }
+  app();
 }
 async function confirmQuestionRemovedFromBank(questionId) {
   const [configResult, workspaceResult] = await Promise.all([
@@ -831,10 +834,18 @@ questionList = function renderTypedQuestionList() {
   if (!state.questions.length) return '<div class="empty">Your question bank is empty. Add a question to begin.</div>';
   return state.questions.map((question, index) => {
     const shortAnswer = question.type === 'short-answer';
+    const questionNumber = `Q${String(index + 1).padStart(2, '0')}`;
+    const syncStatus = question.syncStatus === 'pending'
+      ? `${questionNumber} saving to Supabase...`
+      : question.syncStatus === 'failed'
+        ? `${questionNumber} failed to save to Supabase. It remains saved locally; edit and retry.`
+        : question.syncStatus === 'saved'
+          ? `${questionNumber} successfully saved to question bank`
+          : '';
     const details = shortAnswer
       ? `<p class="subtle" style="margin-bottom:0">Expected answer: ${esc(question.answer || '')}</p>`
       : `<p class="subtle" style="margin-bottom:0">${question.choices.length} choices · Correct answer: ${String.fromCharCode(65 + question.correct)}</p>${question.choices.map((choice, choiceIndex) => `<div class="subtle">${String.fromCharCode(65 + choiceIndex)}. ${esc(choice)}</div>`).join('')}`;
-    return `<article class="question-item"><div class="question-meta"><span class="badge">Q${String(index + 1).padStart(2, '0')}</span><span>${shortAnswer ? 'Short answer' : 'Multiple choice'} · ${question.marks} marks</span></div><h3 style="margin-top:12px">${esc(question.text)}</h3><div class="question-details" id="details-${question.id}">${details}</div><div class="question-actions"><button class="btn btn-secondary btn-small" data-action="expand-question" data-id="${question.id}">Expand</button><button class="btn btn-secondary btn-small" data-action="edit-question" data-id="${question.id}">Edit</button><button class="btn btn-coral btn-small" data-action="delete-question" data-id="${question.id}">Delete</button></div></article>`;
+    return `<article class="question-item"><div class="question-meta"><span class="badge">${questionNumber}</span><span>${shortAnswer ? 'Short answer' : 'Multiple choice'} · ${question.marks} marks</span></div>${syncStatus ? `<p class="subtle" aria-live="polite">${esc(syncStatus)}</p>` : ''}<h3 style="margin-top:12px">${esc(question.text)}</h3><div class="question-details" id="details-${question.id}">${details}</div><div class="question-actions"><button class="btn btn-secondary btn-small" data-action="expand-question" data-id="${question.id}">Expand</button><button class="btn btn-secondary btn-small" data-action="edit-question" data-id="${question.id}">Edit</button><button class="btn btn-coral btn-small" data-action="delete-question" data-id="${question.id}">Delete</button></div></article>`;
   }).join('');
 };
 
@@ -871,52 +882,15 @@ async function confirmShortAnswerQuestionSaved(question) {
   }
 }
 
-async function saveShortAnswerQuestion(event) {
+function saveShortAnswerQuestion(event) {
   event.preventDefault();
   if (quizIsLocked()) return showToast('Stop the quiz before changing questions.');
-  if (teacherMutationInFlight) return;
   const data = new FormData(event.target);
   const text = String(data.get('shortText') || '').trim();
   const answer = String(data.get('expectedAnswer') || '').trim();
-  const id = data.get('shortId') || `q${Date.now()}`;
-  const question = { id, type: 'short-answer', text, answer, choices: [], correct: 0, marks: Number(data.get('shortMarks')) || 1 };
-  const previousQuestions = structuredClone(state.questions);
-  const previousActivity = structuredClone(state.activity);
-  const previousPublished = state.questionsPublished;
-  const previousStudentSessions = structuredClone(state.studentSessions);
-  const existingIndex = state.questions.findIndex(item => item.id === id);
-  teacherMutationInFlight = true;
-  try {
-    if (existingIndex >= 0) state.questions[existingIndex] = question;
-    else state.questions.push(question);
-    state.questionsPublished = false;
-    state.studentSessions = {};
-    state.activity.unshift({
-      text: existingIndex >= 0 ? 'A saved question was updated' : 'A new short answer question was added',
-      type: 'question',
-      time: new Date().toISOString()
-    });
-    state.activity = state.activity.slice(0, 20);
-
-    await persistQuizState(state, 'teacher', { skipConfig: true, waitForSync: true });
-    await confirmShortAnswerQuestionSaved(question);
-
-    delete state.drafts.questions;
-    editingQuestionId = null;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
-    showToast(existingIndex >= 0 ? 'Question updated and confirmed in the question bank.' : 'Short answer question saved and confirmed in the question bank.');
-  } catch (error) {
-    state.questions = previousQuestions;
-    state.activity = previousActivity;
-    state.questionsPublished = previousPublished;
-    state.studentSessions = previousStudentSessions;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
-    void persistQuizState(state, 'teacher', { skipConfig: true });
-    showToast(`Question was not confirmed saved: ${error.message || error}`, 'error');
-  } finally {
-    teacherMutationInFlight = false;
-    app();
-  }
+  const existing = state.questions.find(item => item.id === data.get('shortId'));
+  const id = existing?.id || `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  saveQuestionLocally({ id, type: 'short-answer', text, answer, choices: [], correct: 0, marks: Number(data.get('shortMarks')) || 1 });
 }
 
 document.addEventListener('submit', event => {
