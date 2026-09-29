@@ -686,25 +686,68 @@ questionsView = function questionBankWithShortAnswers() {
   return markup.replace('</form></div><div class="card panel">', `</form>${shortAnswerForm}</div><div class="card panel">`);
 };
 
-function saveShortAnswerQuestion(event) {
+async function confirmShortAnswerQuestionSaved(question) {
+  const { data, error } = await supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle();
+  if (error) throw error;
+
+  const snapshot = data?.data?.currentQuizQuestions;
+  const savedQuestion = snapshot?.quizId === state.currentQuizId && Array.isArray(snapshot.questions)
+    ? snapshot.questions.find(item => item.id === question.id)
+    : null;
+  if (savedQuestion?.type !== 'short-answer'
+    || savedQuestion.text !== question.text
+    || savedQuestion.answer !== question.answer
+    || Number(savedQuestion.marks) !== Number(question.marks)) {
+    throw new Error('Supabase did not confirm this short-answer question in the question bank.');
+  }
+}
+
+async function saveShortAnswerQuestion(event) {
   event.preventDefault();
   if (quizIsLocked()) return showToast('Stop the quiz before changing questions.');
+  if (teacherMutationInFlight) return;
   const data = new FormData(event.target);
   const text = String(data.get('shortText') || '').trim();
   const answer = String(data.get('expectedAnswer') || '').trim();
   const id = data.get('shortId') || `q${Date.now()}`;
   const question = { id, type: 'short-answer', text, answer, choices: [], correct: 0, marks: Number(data.get('shortMarks')) || 1 };
+  const previousQuestions = structuredClone(state.questions);
+  const previousActivity = structuredClone(state.activity);
+  const previousPublished = state.questionsPublished;
+  const previousStudentSessions = structuredClone(state.studentSessions);
   const existingIndex = state.questions.findIndex(item => item.id === id);
-  if (existingIndex >= 0) state.questions[existingIndex] = question;
-  else state.questions.push(question);
-  state.questionsPublished = false;
-  state.studentSessions = {};
-  delete state.drafts.questions;
-  editingQuestionId = null;
-  addActivity(existingIndex >= 0 ? 'A saved question was updated' : 'A new short answer question was added', 'question');
-  saveState({ skipConfig: true });
-  showToast(existingIndex >= 0 ? 'Question updated. Submit questions again to publish changes.' : 'Short answer question saved to the bank.');
-  app();
+  teacherMutationInFlight = true;
+  try {
+    if (existingIndex >= 0) state.questions[existingIndex] = question;
+    else state.questions.push(question);
+    state.questionsPublished = false;
+    state.studentSessions = {};
+    state.activity.unshift({
+      text: existingIndex >= 0 ? 'A saved question was updated' : 'A new short answer question was added',
+      type: 'question',
+      time: new Date().toISOString()
+    });
+    state.activity = state.activity.slice(0, 20);
+
+    await persistQuizState(state, 'teacher', { skipConfig: true, waitForSync: true });
+    await confirmShortAnswerQuestionSaved(question);
+
+    delete state.drafts.questions;
+    editingQuestionId = null;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+    showToast(existingIndex >= 0 ? 'Question updated and confirmed in the question bank.' : 'Short answer question saved and confirmed in the question bank.');
+  } catch (error) {
+    state.questions = previousQuestions;
+    state.activity = previousActivity;
+    state.questionsPublished = previousPublished;
+    state.studentSessions = previousStudentSessions;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+    void persistQuizState(state, 'teacher', { skipConfig: true });
+    showToast(`Question was not confirmed saved: ${error.message || error}`, 'error');
+  } finally {
+    teacherMutationInFlight = false;
+    app();
+  }
 }
 
 document.addEventListener('submit', event => {
