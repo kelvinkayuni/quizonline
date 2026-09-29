@@ -480,7 +480,91 @@ function bindEvents() { applyBranding(); const totalQuestionsField = document.qu
 }
 async function handleLogin(event) { event.preventDefault(); if (stateHydrationPromise) await stateHydrationPromise; const form = new FormData(event.target); const username = String(form.get('username')).trim(); const password = String(form.get('password')); if (username.toLowerCase() === TEACHER.username) { if (password !== TEACHER.password) return showToast('Incorrect Username or Password'); session = { role: 'teacher', username: TEACHER.username }; teacherView = 'overview'; app(); return; } const importedUsername = state.importedFile?.usernames?.find(item => item === username); const student = state.studentLoginActive && state.importedFile && importedUsername ? state.users.find(user => user.username === importedUsername && user.password === password) : null; if (!student) return showToast('Incorrect Username or Password'); const previous = state.results.find(result => result.username === username && state.questionsPublished && state.currentQuizId && result.quizId === state.currentQuizId); if (previous) { session = { role: 'student', username: student.username, quizId: state.currentQuizId, completed: true, result: previous }; app(); return; } const savedSession = state.studentSessions[student.username]; const originalQuestions = state.questions; const questionOrder = savedSession?.questionOrder?.length ? savedSession.questionOrder : shuffleQuestions(originalQuestions, username); state.questions = questionOrder; state.users = state.users.map(user => user.username === student.username ? { ...user, status: 'online', lastSeen: new Date().toISOString() } : user); session = savedSession && savedSession.quizId === state.currentQuizId ? { ...savedSession, role: 'student', originalQuestions, questionOrder } : { role: 'student', username: student.username, quizId: state.currentQuizId, originalQuestions, questionOrder, index: 0, selected: null, feedback: null, remaining: Math.max(60, state.config.duration * 60), answers: [] }; if (!session.started) session.remaining = Math.max(60, Number(state.config.duration) * 60); void markStudentOnline(student.username, session.quizId); saveStudentSession(); app(); }
 function logout() { stopTimer(); if (session?.role === 'student') { void markStudentOffline(session.username, session.quizId); state.users = state.users.map(user => user.username === session.username ? { ...user, status: 'offline', lastSeen: new Date().toISOString() } : user); if (session.originalQuestions) state.questions = session.originalQuestions; saveState(); } session = null; saveWindowSession(); app(); }
-function saveQuestion(event) { event.preventDefault(); if (quizIsLocked()) return showToast('Stop the quiz before changing questions.'); const data = new FormData(event.target); state.config.courseName = String(data.get('courseName') ?? '').trim(); state.config.courseCode = String(data.get('courseCode') ?? '').trim(); const choices = [...event.target.querySelectorAll('input[name="choice"]')].map(input => input.value.trim()).filter(Boolean); const correct = Math.min(Number(data.get('correct')), choices.length - 1); const id = data.get('id') || `q${Date.now()}`; const question = { id, text: data.get('text').trim(), choices, correct, marks: Number(data.get('marks')) || 1 }; const existingIndex = state.questions.findIndex(item => item.id === id); if (existingIndex >= 0) state.questions[existingIndex] = question; else state.questions.push(question); state.questionsPublished = false; state.studentSessions = {}; delete state.drafts.questions; editingQuestionId = null; addActivity(existingIndex >= 0 ? 'A saved question was updated' : 'A new question was added', 'question'); saveState({ skipConfig: true }); showToast(existingIndex >= 0 ? 'Question updated. Submit questions again to publish changes.' : 'Question saved to the bank.'); app(); }
+async function confirmMultipleChoiceQuestionSaved(question) {
+  const { data, error } = await supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle();
+  if (error) throw error;
+
+  const snapshot = data?.data?.currentQuizQuestions;
+  const savedQuestion = snapshot?.quizId === state.currentQuizId && Array.isArray(snapshot.questions)
+    ? snapshot.questions.find(item => item.id === question.id)
+    : null;
+  if (!savedQuestion
+    || savedQuestion.text !== question.text
+    || Number(savedQuestion.correct) !== Number(question.correct)
+    || Number(savedQuestion.marks) !== Number(question.marks)
+    || JSON.stringify(savedQuestion.choices || []) !== JSON.stringify(question.choices)) {
+    throw new Error('Supabase did not confirm this multiple-choice question in the question bank.');
+  }
+}
+
+async function saveQuestion(event) {
+  event.preventDefault();
+  if (quizIsLocked()) return showToast('Stop the quiz before changing questions.');
+  if (teacherMutationInFlight) return;
+
+  const data = new FormData(event.target);
+  const choices = [...event.target.querySelectorAll('input[name="choice"]')]
+    .map(input => input.value.trim())
+    .filter(Boolean);
+  const correct = Math.min(Number(data.get('correct')), choices.length - 1);
+  const id = data.get('id') || `q${Date.now()}`;
+  const question = {
+    id,
+    text: String(data.get('text') || '').trim(),
+    choices,
+    correct,
+    marks: Number(data.get('marks')) || 1
+  };
+  const previousState = {
+    questions: structuredClone(state.questions),
+    config: structuredClone(state.config),
+    questionsPublished: state.questionsPublished,
+    studentSessions: structuredClone(state.studentSessions),
+    activity: structuredClone(state.activity),
+    drafts: structuredClone(state.drafts),
+    editingQuestionId
+  };
+  const existingIndex = state.questions.findIndex(item => item.id === id);
+  teacherMutationInFlight = true;
+
+  try {
+    state.config.courseName = String(data.get('courseName') ?? '').trim();
+    state.config.courseCode = String(data.get('courseCode') ?? '').trim();
+    if (existingIndex >= 0) state.questions[existingIndex] = question;
+    else state.questions.push(question);
+    state.questionsPublished = false;
+    state.studentSessions = {};
+    state.activity.unshift({
+      text: existingIndex >= 0 ? 'A saved question was updated' : 'A new question was added',
+      type: 'question',
+      time: new Date().toISOString()
+    });
+    state.activity = state.activity.slice(0, 20);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+
+    await persistQuizState(state, 'teacher', { skipConfig: true, waitForSync: true });
+    await confirmMultipleChoiceQuestionSaved(question);
+
+    delete state.drafts.questions;
+    editingQuestionId = null;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+    showToast(existingIndex >= 0 ? 'Question updated and confirmed in the question bank.' : 'Question saved and confirmed in the question bank.');
+  } catch (error) {
+    state.questions = previousState.questions;
+    state.config = previousState.config;
+    state.questionsPublished = previousState.questionsPublished;
+    state.studentSessions = previousState.studentSessions;
+    state.activity = previousState.activity;
+    state.drafts = previousState.drafts;
+    editingQuestionId = previousState.editingQuestionId;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+    void persistQuizState(state, 'teacher', { skipConfig: true });
+    showToast(`Question was not confirmed saved: ${error.message || error}`, 'error');
+  } finally {
+    teacherMutationInFlight = false;
+    app();
+  }
+}
 async function confirmQuestionRemovedFromBank(questionId) {
   const [configResult, workspaceResult] = await Promise.all([
     supabase.from('quiz_config').select('quiz_id, published').eq('id', 1).maybeSingle(),
