@@ -358,24 +358,6 @@ export function persistQuestionToSupabase(state, localId) {
     }), 'Question-bank snapshot synchronization');
     if (updatedWorkspace.error) throw updatedWorkspace.error;
 
-    const [verifiedRow, verifiedWorkspace] = await Promise.all([
-      withTimeout(supabase.from('questions').select('id, text, choices, correct, marks').eq('id', savedId).maybeSingle(), 'Question save confirmation'),
-      withTimeout(supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle(), 'Question snapshot confirmation')
-    ]);
-    if (verifiedRow.error) throw verifiedRow.error;
-    if (verifiedWorkspace.error) throw verifiedWorkspace.error;
-
-    const verifiedSnapshot = verifiedWorkspace.data?.data?.currentQuizQuestions;
-    const verifiedQuestion = verifiedSnapshot?.quizId === state.currentQuizId && Array.isArray(verifiedSnapshot.questions)
-      ? verifiedSnapshot.questions.find(item => item.id === savedId)
-      : null;
-    if (!verifiedRow.data || !sameQuestionRow(verifiedRow.data, questionForSync)
-      || !verifiedQuestion || !sameQuestionRow(verifiedQuestion, questionForSync)
-      || verifiedQuestion.type !== questionForSync.type
-      || String(verifiedQuestion.answer || '') !== String(questionForSync.answer || '')) {
-      throw new Error('Supabase did not confirm the saved question in the question bank.');
-    }
-
     return savedId;
   });
   syncQueue = operation.catch(() => {});
