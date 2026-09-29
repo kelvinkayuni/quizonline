@@ -1,5 +1,12 @@
 const spellingVariantGroups = [
   ['gemmology', 'gemology'],
+  ['aluminium', 'aluminum'],
+  ['sulphur', 'sulfur'],
+  ['mould', 'mold'],
+  ['plough', 'plow'],
+  ['tyre', 'tire'],
+  ['cheque', 'check'],
+  ['grey', 'gray'],
   ['colour', 'color'],
   ['favour', 'favor'],
   ['honour', 'honor'],
@@ -33,6 +40,91 @@ const spellingVariants = new Map(
 );
 
 const synonymGroups = [
+  ['destination', 'attraction'],
+  ['storytelling', 'branding'],
+  ['promotion', 'advertising'],
+  ['tourist', 'visitor'],
+  ['guide', 'interpreter'],
+  ['resort', 'lodge'],
+  ['guesthouse', 'inn'],
+  ['brochure', 'pamphlet'],
+  ['booking', 'reservation'],
+  ['carat', 'weight'],
+  ['clarity', 'purity'],
+  ['appraisal', 'valuation'],
+  ['authenticity', 'provenance'],
+  ['simulant', 'imitation'],
+  ['synthetic', 'labgrown'],
+  ['deposit', 'ore body'],
+  ['matrix', 'host rock'],
+  ['prospecting', 'exploration'],
+  ['tailings', 'mine waste'],
+  ['diamond', 'brilliant'],
+  ['ruby', 'red corundum'],
+  ['sapphire', 'blue corundum'],
+  ['emerald', 'green beryl'],
+  ['aquamarine', 'blue beryl'],
+  ['amethyst', 'purple quartz'],
+  ['citrine', 'yellow quartz'],
+  ['peridot', 'olivine'],
+  ['spinel', 'balas ruby'],
+  ['chrysoberyl', "cat's eye"],
+  ['student', 'pupil'],
+  ['teacher', 'instructor'],
+  ['car', 'automobile'],
+  ['house', 'home'],
+  ['job', 'occupation'],
+  ['child', 'kid'],
+  ['lawyer', 'attorney'],
+  ['movie', 'film', 'cinema'],
+  ['shop', 'store'],
+  ['information', 'data'],
+  ['equipment', 'tools'],
+  ['furniture', 'furnishings'],
+  ['advice', 'guidance'],
+  ['homework', 'assignment'],
+  ['trousers', 'pants'],
+  ['jumper', 'sweater'],
+  ['lift', 'elevator', 'raise'],
+  ['biscuit', 'cookie'],
+  ['crisps', 'chips'],
+  ['cellphone', 'mobile'],
+  ['pc', 'computer'],
+  ['tv', 'television'],
+  ['photo', 'picture'],
+  ['fridge', 'refrigerator'],
+  ['bike', 'bicycle'],
+  ['cab', 'taxi'],
+  ['mail', 'post'],
+  ['parcel', 'package'],
+  ['resume', 'cv'],
+  ['happy', 'glad'],
+  ['angry', 'mad'],
+  ['fast', 'quick'],
+  ['small', 'tiny'],
+  ['smart', 'clever'],
+  ['rich', 'wealthy'],
+  ['poor', 'needy'],
+  ['sick', 'ill'],
+  ['beauty', 'beautiful', 'pretty'],
+  ['football', 'soccer'],
+  ['holiday', 'vacation'],
+  ['rubbish', 'trash'],
+  ['lorry', 'truck'],
+  ['torch', 'flashlight'],
+  ['flat', 'apartment'],
+  ['queue', 'line'],
+  ['nappy', 'diaper'],
+  ['sweets', 'candy'],
+  ['trainers', 'sneakers'],
+  ['autumn', 'fall'],
+  ['underground', 'subway'],
+  ['timetable', 'schedule'],
+  ['maths', 'math'],
+  ['aeroplane', 'airplane'],
+  ['petrol', 'gas'],
+  ['bonnet', 'hood'],
+  ['boot', 'trunk'],
   ['big', 'large'],
   ['buy', 'purchase'],
   ['doctor', 'physician'],
@@ -47,6 +139,15 @@ const synonyms = new Map(
 
 const irregularRoots = new Map([
   ['ran', 'run'],
+  ['saw', 'see'],
+  ['seen', 'see'],
+  ['took', 'take'],
+  ['given', 'give'],
+  ['spoke', 'speak'],
+  ['spoken', 'speak'],
+  ['wrote', 'write'],
+  ['written', 'write'],
+  ['children', 'child'],
   ['made', 'make'],
   ['bought', 'buy'],
   ['went', 'go'],
@@ -90,13 +191,71 @@ const tensNumbers = new Map([
   ['sixty', 60], ['seventy', 70], ['eighty', 80], ['ninety', 90]
 ]);
 const compoundPhrases = [
+  { words: ['data', 'base'], value: 'database' },
+  { words: ['high', 'school'], value: 'highschool' },
+  { words: ['ice', 'cream'], value: 'icecream' },
+  { words: ['class', 'room'], value: 'classroom' },
+  { words: ['e', 'mail'], value: 'email' },
+  { words: ['cell', 'phone'], value: 'cellphone' },
+  { words: ['note', 'book'], value: 'notebook' },
+  { words: ['text', 'book'], value: 'textbook' },
+  { words: ['web', 'site'], value: 'website' },
+  { words: ['lap', 'top'], value: 'laptop' },
   { words: ['water', 'fall'], value: 'waterfall' },
   { words: ['well', 'being'], value: 'wellbeing' }
+];
+const acceptedPhraseGroups = [
+  { words: ['tour', 'operator'], value: 'tour_operator' },
+  { words: ['travel', 'agency'], value: 'tour_operator' },
+  { words: ['digital', 'marketing'], value: 'digital_marketing' },
+  { words: ['online', 'promotion'], value: 'digital_marketing' },
+  { words: ['brand', 'ambassador'], value: 'influencer' },
+  { words: ['community', 'engagement'], value: 'community_engagement' },
+  { words: ['local', 'participation'], value: 'community_engagement' },
+  { words: ['responsible', 'tourism'], value: 'responsible_tourism' },
+  { words: ['ethical', 'tourism'], value: 'responsible_tourism' },
+  { words: ['risk', 'management'], value: 'risk_management' },
+  { words: ['safety', 'planning'], value: 'risk_management' },
+  { words: ['carrying', 'capacity'], value: 'carrying_capacity' },
+  { words: ['visitor', 'limit'], value: 'carrying_capacity' },
+  { words: ['museum'], value: 'museum' },
+  { words: ['exhibition', 'hall'], value: 'museum' },
+  { words: ['ticketing'], value: 'ticketing' },
+  { words: ['pass', 'issuance'], value: 'ticketing' },
+  { words: ['seasonality'], value: 'seasonality' },
+  { words: ['peak', 'season'], value: 'seasonality' },
+  { words: ['off', 'season'], value: 'seasonality' },
+  { words: ['certification'], value: 'certification' },
+  { words: ['lab', 'report'], value: 'certification' },
+  { words: ['lab', 'grown'], value: 'synthetic' },
+  { words: ['ore', 'body'], value: 'deposit' },
+  { words: ['alluvial', 'deposit'], value: 'alluvial_deposit' },
+  { words: ['placer', 'deposit'], value: 'alluvial_deposit' },
+  { words: ['host', 'rock'], value: 'matrix' },
+  { words: ['beneficiation'], value: 'beneficiation' },
+  { words: ['ore', 'dressing'], value: 'beneficiation' },
+  { words: ['mine', 'waste'], value: 'tailings' },
+  { words: ['pit'], value: 'pit' },
+  { words: ['open', 'cast', 'mine'], value: 'pit' },
+  { words: ['shaft'], value: 'shaft' },
+  { words: ['underground', 'tunnel'], value: 'shaft' },
+  { words: ['artisanal', 'mining'], value: 'artisanal_mining' },
+  { words: ['small', 'scale', 'mining'], value: 'artisanal_mining' },
+  { words: ['red', 'corundum'], value: 'ruby' },
+  { words: ['blue', 'corundum'], value: 'sapphire' },
+  { words: ['green', 'beryl'], value: 'emerald' },
+  { words: ['blue', 'beryl'], value: 'aquamarine' },
+  { words: ['purple', 'quartz'], value: 'amethyst' },
+  { words: ['yellow', 'quartz'], value: 'citrine' },
+  { words: ['balas', 'ruby'], value: 'spinel' },
+  { words: ['cat', 'eye'], value: 'chrysoberyl' },
+  { words: ['cats', 'eye'], value: 'chrysoberyl' }
 ];
 const meaningPhrases = [
   { words: ['not', 'good'], value: 'bad' },
   { words: ['united', 'nations'], value: 'un' },
-  ...compoundPhrases
+  ...compoundPhrases,
+  ...acceptedPhraseGroups
 ];
 const eStemWords = new Set([
   'make', 'use', 'write', 'drive', 'take', 'give', 'come', 'live',
@@ -107,6 +266,10 @@ function expandContractions(value) {
     .normalize('NFKC')
     .toLowerCase()
   .replace(/[’‘]/g, "'")
+  .replace(/\blet's\b/g, 'let us')
+  .replace(/\by'all\b/g, 'you all')
+  .replace(/\bgonna\b/g, 'going to')
+  .replace(/\bwanna\b/g, 'want to')
   .replace(/\bcan't\b/g, 'can not')
   .replace(/\bcannot\b/g, 'can not')
   .replace(/\bwon't\b/g, 'will not')
@@ -247,7 +410,12 @@ function canonicalizeTokens(tokens) {
   const phrasesReplaced = replacePhrases(numbered);
   const compoundsReplaced = replacePhrases(phrasesReplaced);
   return compoundsReplaced.map(word => {
-    const root = rootWord(word);
+    const directSynonym = synonyms.get(word);
+    if (directSynonym) return directSynonym;
+    const normalized = normalizeSpelling(word);
+    const normalizedSynonym = synonyms.get(normalized);
+    if (normalizedSynonym) return normalizedSynonym;
+    const root = normalizeSpelling(rootWord(normalized));
     return synonyms.get(root) || root;
   });
 }
