@@ -330,7 +330,10 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
     const staleIds = existingQuestions.data.map(row => row.id).filter(id => !savedIds.has(id));
     if (staleIds.length && !questionSyncFailed) {
       const result = await supabase.from('questions').delete().in('id', staleIds);
-      if (result.error) reportError('question deletion', result.error);
+      if (result.error) {
+        reportError('question deletion', result.error);
+        if (optionsToPersist.waitForSync) throw result.error;
+      }
     }
 
     const configResult = optionsToPersist.skipConfig ? null : await supabase.from('quiz_config').upsert({

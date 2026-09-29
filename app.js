@@ -462,7 +462,73 @@ function bindEvents() { applyBranding(); const totalQuestionsField = document.qu
 async function handleLogin(event) { event.preventDefault(); if (stateHydrationPromise) await stateHydrationPromise; const form = new FormData(event.target); const username = String(form.get('username')).trim(); const password = String(form.get('password')); if (username.toLowerCase() === TEACHER.username) { if (password !== TEACHER.password) return showToast('Incorrect Username or Password'); session = { role: 'teacher', username: TEACHER.username }; teacherView = 'overview'; app(); return; } const importedUsername = state.importedFile?.usernames?.find(item => item === username); const student = state.studentLoginActive && state.importedFile && importedUsername ? state.users.find(user => user.username === importedUsername && user.password === password) : null; if (!student) return showToast('Incorrect Username or Password'); const previous = state.results.find(result => result.username === username && state.questionsPublished && state.currentQuizId && result.quizId === state.currentQuizId); if (previous) { session = { role: 'student', username: student.username, quizId: state.currentQuizId, completed: true, result: previous }; app(); return; } const savedSession = state.studentSessions[student.username]; const originalQuestions = state.questions; const questionOrder = savedSession?.questionOrder?.length ? savedSession.questionOrder : shuffleQuestions(originalQuestions, username); state.questions = questionOrder; state.users = state.users.map(user => user.username === student.username ? { ...user, status: 'online', lastSeen: new Date().toISOString() } : user); session = savedSession && savedSession.quizId === state.currentQuizId ? { ...savedSession, role: 'student', originalQuestions, questionOrder } : { role: 'student', username: student.username, quizId: state.currentQuizId, originalQuestions, questionOrder, index: 0, selected: null, feedback: null, remaining: Math.max(60, state.config.duration * 60), answers: [] }; if (!session.started) session.remaining = Math.max(60, Number(state.config.duration) * 60); void markStudentOnline(student.username, session.quizId); saveStudentSession(); app(); }
 function logout() { stopTimer(); if (session?.role === 'student') { void markStudentOffline(session.username, session.quizId); state.users = state.users.map(user => user.username === session.username ? { ...user, status: 'offline', lastSeen: new Date().toISOString() } : user); if (session.originalQuestions) state.questions = session.originalQuestions; saveState(); } session = null; saveWindowSession(); app(); }
 function saveQuestion(event) { event.preventDefault(); if (quizIsLocked()) return showToast('Stop the quiz before changing questions.'); const data = new FormData(event.target); state.config.courseName = String(data.get('courseName') ?? '').trim(); state.config.courseCode = String(data.get('courseCode') ?? '').trim(); const choices = [...event.target.querySelectorAll('input[name="choice"]')].map(input => input.value.trim()).filter(Boolean); const correct = Math.min(Number(data.get('correct')), choices.length - 1); const id = data.get('id') || `q${Date.now()}`; const question = { id, text: data.get('text').trim(), choices, correct, marks: Number(data.get('marks')) || 1 }; const existingIndex = state.questions.findIndex(item => item.id === id); if (existingIndex >= 0) state.questions[existingIndex] = question; else state.questions.push(question); state.questionsPublished = false; state.studentSessions = {}; delete state.drafts.questions; editingQuestionId = null; addActivity(existingIndex >= 0 ? 'A saved question was updated' : 'A new question was added', 'question'); saveState({ skipConfig: true }); showToast(existingIndex >= 0 ? 'Question updated. Submit questions again to publish changes.' : 'Question saved to the bank.'); app(); }
-function deleteQuestion(id) { if (quizIsLocked()) return showToast('Stop the quiz before changing questions.'); state.questions = state.questions.filter(question => question.id !== id); state.questionsPublished = false; state.quizStopped = false; state.currentQuizId = null; state.studentSessions = {}; state.config.totalQuestions = Math.min(state.config.totalQuestions || state.questions.length, state.questions.length); saveState(); addActivity('A saved question was deleted', 'question'); showToast('Question deleted and current quiz cleared.'); app(); }
+async function confirmQuestionRemovedFromBank(questionId) {
+  const [configResult, workspaceResult] = await Promise.all([
+    supabase.from('quiz_config').select('quiz_id, published').eq('id', 1).maybeSingle(),
+    supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle()
+  ]);
+  if (configResult.error) throw configResult.error;
+  if (workspaceResult.error) throw workspaceResult.error;
+
+  const savedQuestions = workspaceResult.data?.data?.currentQuizQuestions;
+  const persistedQuizId = configResult.data?.quiz_id ?? null;
+  if (persistedQuizId !== state.currentQuizId
+    || Boolean(configResult.data?.published)
+    || savedQuestions?.quizId !== persistedQuizId
+    || !Array.isArray(savedQuestions.questions)
+    || savedQuestions.questions.length !== state.questions.length
+    || savedQuestions.questions.some(question => question.id === questionId)
+    || state.questions.some(question => !savedQuestions.questions.some(saved => saved.id === question.id))) {
+    throw new Error('Supabase did not confirm that the question was removed from the question bank.');
+  }
+}
+
+async function deleteQuestion(id) {
+  if (quizIsLocked()) return showToast('Stop the quiz before changing questions.');
+  if (teacherMutationInFlight) return;
+  if (!state.questions.some(question => question.id === id)) return showToast('This question is no longer in the question bank.');
+
+  const previousState = {
+    questions: structuredClone(state.questions),
+    questionsPublished: state.questionsPublished,
+    quizStopped: state.quizStopped,
+    currentQuizId: state.currentQuizId,
+    studentSessions: structuredClone(state.studentSessions),
+    config: structuredClone(state.config),
+    activity: structuredClone(state.activity)
+  };
+  teacherMutationInFlight = true;
+
+  try {
+    state.questions = state.questions.filter(question => question.id !== id);
+    state.questionsPublished = false;
+    state.quizStopped = false;
+    state.currentQuizId = null;
+    state.studentSessions = {};
+    state.config.totalQuestions = Math.min(state.config.totalQuestions || state.questions.length, state.questions.length);
+    state.activity.unshift({ text: 'A saved question was deleted', type: 'question', time: new Date().toISOString() });
+    state.activity = state.activity.slice(0, 20);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+
+    await persistQuizState(state, 'teacher', { waitForSync: true });
+    await confirmQuestionRemovedFromBank(id);
+    showToast('Question deleted and current quiz cleared.');
+  } catch (error) {
+    state.questions = previousState.questions;
+    state.questionsPublished = previousState.questionsPublished;
+    state.quizStopped = previousState.quizStopped;
+    state.currentQuizId = previousState.currentQuizId;
+    state.studentSessions = previousState.studentSessions;
+    state.config = previousState.config;
+    state.activity = previousState.activity;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+    void persistQuizState(state, 'teacher');
+    showToast(`Question was not confirmed deleted: ${error.message || error}`, 'error');
+  } finally {
+    teacherMutationInFlight = false;
+    app();
+  }
+}
 async function clearAllQuestions() { if (quizIsLocked() || teacherMutationInFlight) return showToast('Stop the quiz before changing questions.'); teacherMutationInFlight = true; try { state.questions = []; state.questionsPublished = false; state.quizStopped = false; state.currentQuizId = null; state.configSaved = false; state.studentSessions = {}; state.config = { courseName: state.config.courseName || '', courseCode: state.config.courseCode || '', totalQuestions: 0, duration: 0, start: '', end: '' }; saveState(); addActivity('All saved questions were cleared', 'question'); try { await persistQuizControlState(); await persistQuizState(state, 'teacher', { waitForSync: true }); } catch (error) { if (!(await confirmQuestionBankCleared())) throw error; } await confirmSavedConfiguration(false); showToast('Question bank and quiz configuration cleared.'); } catch (error) { showToast(`Question bank could not be cleared: ${error.message || error}`); } finally { teacherMutationInFlight = false; app(); } }
 async function publishQuestionsForStudents() { if (quizIsLocked()) return showToast('Stop the quiz before submitting new questions.'); if (!state.questions.length) return showToast('Add at least one saved question first.'); if (!state.config.totalQuestions || !state.config.duration) return showToast('Save quiz configuration before submitting questions.'); if (quizHasEnded()) return showToast('The quiz end time has passed. Update Quiz configuration, then submit again.'); state.questionsPublished = true; state.quizStopped = false; state.currentQuizId = `quiz-${Date.now()}`; const submittedQuizId = state.currentQuizId; state.studentSessions = {}; state.healthClearedAt = null; state.config.totalQuestions = Math.min(state.config.totalQuestions || state.questions.length, state.questions.length); saveState(); try { await persistQuizControlState(); await persistQuizState(state, 'teacher', { waitForSync: true }); } catch (error) { if (!(await confirmPublishedQuiz(submittedQuizId))) { state.questionsPublished = false; showToast(`Quiz submission failed: ${error.message || error}`); return; } } addActivity('Saved questions were submitted to students', 'check'); showToast('New quiz submitted. Students can start it now.'); app(); }
 async function stopQuizForEveryoneLegacy() { if (!state.questionsPublished || !state.currentQuizId || teacherMutationInFlight) return; teacherMutationInFlight = true; try { const stoppedQuizId = state.currentQuizId; state.deletedQuizIds = [...new Set([...state.deletedQuizIds, stoppedQuizId])]; state.results = state.results.filter(result => result.quizId !== stoppedQuizId); state.studentHistory = state.studentHistory.filter(result => result.quizId !== stoppedQuizId); state.resultFiles = state.resultFiles.filter(file => !file.id.includes(stoppedQuizId)); state.healthClearedAt = null; state.quizStopped = true; state.questionsPublished = false; state.currentQuizId = null; state.configSaved = false; Object.keys(state.studentSessions).forEach(username => delete state.studentSessions[username]); state.activity.unshift({ text: 'Quiz stopped for all students and its records were removed', type: 'results', time: new Date().toISOString() }); state.activity = state.activity.slice(0, 20); localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); await persistQuizControlState(); await persistQuizState(state, 'teacher', { waitForSync: true }); await confirmSavedConfiguration(false); const { data, error } = await supabase.from('quiz_config').select('quiz_id, published, stopped').eq('id', 1).maybeSingle(); if (error || !data || !data.stopped || data.published || data.quiz_id) throw error || new Error('Supabase did not confirm the stopped quiz state.'); showToast('Quiz stopped. You can edit the questions and submit an updated quiz.'); app(); } catch (error) { showToast(`Quiz stop could not be confirmed: ${error.message || error}`); } finally { teacherMutationInFlight = false; } }
