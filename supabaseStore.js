@@ -151,8 +151,18 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true, 
     state.healthClearedAt = workspace.healthClearedAt || null;
     state.configResetAt = workspace.configResetAt || state.configResetAt || '';
     if (state.configResetAt && state.configResetAt !== previousConfigResetAt) delete state.drafts.config;
-    if (workspace.currentQuizQuestions?.quizId === state.currentQuizId && Array.isArray(workspace.currentQuizQuestions.questions)) {
-      state.questions = workspace.currentQuizQuestions.questions.map(normalizeQuestion);
+    const snapshotQuestions = workspace.currentQuizQuestions?.questions;
+    if (Array.isArray(snapshotQuestions)) {
+      const snapshotById = new Map(snapshotQuestions.map(question => [question.id, question]));
+      state.questions = state.questions.map(question => {
+        const savedQuestion = snapshotById.get(question.id);
+        return savedQuestion?.type === 'short-answer'
+          ? { ...question, type: 'short-answer', answer: String(savedQuestion.answer || '') }
+          : question;
+      });
+    }
+    if (workspace.currentQuizQuestions?.quizId === state.currentQuizId && Array.isArray(snapshotQuestions)) {
+      state.questions = snapshotQuestions.map(normalizeQuestion);
     }
     if (storedResultFiles.some(file => Array.isArray(file.questions))) {
       const cleanupResult = await supabase.from('quiz_workspace').update({ data: { ...workspace, resultFiles: cleanedResultFiles }, updated_at: new Date().toISOString() }).eq('id', 1);
