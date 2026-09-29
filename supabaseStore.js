@@ -86,7 +86,7 @@ function sameQuestionRow(left, right) {
     && JSON.stringify(left.choices || []) === JSON.stringify(right.choices || []);
 }
 
-function mergeUnconfirmedLocalQuestions(savedQuestions, localQuestions) {
+function mergeUnconfirmedLocalQuestions(savedQuestions, localQuestions, confirmedLocalIds = new Set()) {
   const merged = savedQuestions.map(question => ({ ...question }));
   const claimedIndexes = new Set();
 
@@ -106,10 +106,48 @@ function mergeUnconfirmedLocalQuestions(savedQuestions, localQuestions) {
     const savedQuestion = merged[index];
     claimedIndexes.add(index);
     localQuestion.id = savedQuestion.id;
-    merged[index] = { ...savedQuestion, ...localQuestion, id: savedQuestion.id };
+    const isConfirmed = confirmedLocalIds.has(localQuestion.localId)
+      || confirmedLocalIds.has(localQuestion.id)
+      || confirmedLocalIds.has(savedQuestion.id);
+    merged[index] = {
+      ...savedQuestion,
+      ...localQuestion,
+      id: savedQuestion.id,
+      ...(isConfirmed ? { syncStatus: 'saved', syncError: '' } : {})
+    };
   });
 
   return merged;
+}
+
+function confirmedLocalQuestionIds(localQuestions, questionRows, snapshot, expectedQuizId) {
+  const confirmedIds = new Set();
+  if (snapshot?.quizId !== expectedQuizId || !Array.isArray(snapshot.questions)) return confirmedIds;
+  const claimedRemoteIds = new Set();
+
+  localQuestions.forEach(localQuestion => {
+    const savedRow = questionRows.find(row =>
+      !claimedRemoteIds.has(row.id)
+      && (row.id === localQuestion.id || row.id === localQuestion.localId || sameQuestionRow(row, localQuestion))
+      && sameQuestionRow(row, localQuestion)
+    );
+    if (!savedRow) return;
+
+    const snapshotQuestion = snapshot.questions.find(question => question.id === savedRow.id);
+    if (!snapshotQuestion || !sameQuestionRow(snapshotQuestion, localQuestion)) return;
+    if (localQuestion.type === 'short-answer') {
+      if (snapshotQuestion.type !== 'short-answer' || String(snapshotQuestion.answer || '') !== String(localQuestion.answer || '')) return;
+    } else if (snapshotQuestion.type === 'short-answer') {
+      return;
+    }
+
+    claimedRemoteIds.add(savedRow.id);
+    confirmedIds.add(localQuestion.localId || localQuestion.id);
+    confirmedIds.add(localQuestion.id);
+    confirmedIds.add(savedRow.id);
+  });
+
+  return confirmedIds;
 }
 
 function questionForWorkspace(question) {
@@ -176,6 +214,15 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true, 
 
   if (!workspaceResult.error && workspaceResult.data?.data) {
     const workspace = workspaceResult.data.data;
+    const remoteQuestionRows = !questionsResult.error ? questionsResult.data : [];
+    const workspaceQuestionSnapshot = workspace.currentQuizQuestions;
+    const expectedSnapshotQuizId = configResult.data?.quiz_id ?? null;
+    const confirmedLocalIds = confirmedLocalQuestionIds(
+      unconfirmedLocalQuestions,
+      remoteQuestionRows,
+      workspaceQuestionSnapshot,
+      expectedSnapshotQuizId
+    );
     const previousConfigResetAt = state.configResetAt || '';
     const storedResultFiles = Array.isArray(workspace.resultFiles) ? workspace.resultFiles : [];
     const cleanedResultFiles = storedResultFiles.map(({ questions, ...file }) => file);
@@ -209,7 +256,8 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true, 
     if (workspace.currentQuizQuestions?.quizId === state.currentQuizId && Array.isArray(snapshotQuestions)) {
       state.questions = mergeUnconfirmedLocalQuestions(
         snapshotQuestions.map(normalizeQuestion),
-        unconfirmedLocalQuestions
+        unconfirmedLocalQuestions,
+        confirmedLocalIds
       );
     }
     if (storedResultFiles.some(file => Array.isArray(file.questions))) {
