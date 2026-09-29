@@ -100,7 +100,7 @@ const meaningPhrases = [
 ];
 const eStemWords = new Set([
   'make', 'use', 'write', 'drive', 'take', 'give', 'come', 'live',
-  'produce', 'change', 'bake', 'move', 'create', 'dance'
+  'produce', 'change', 'bake', 'move', 'create', 'dance', 'measure'
 ]);
 function expandContractions(value) {
   return String(value || '')
