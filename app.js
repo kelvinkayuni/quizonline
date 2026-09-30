@@ -115,6 +115,8 @@ async function saveConfig(event) {
   if (state.configSaved) return showToast('The time set is already saved.');
   if (teacherMutationInFlight) return;
   const data = new FormData(event.target);
+  const duration = Number(data.get('duration'));
+  if (!Number.isFinite(duration) || duration < 1) return showToast('Duration must be at least 1 minute.');
   const start = String(data.get('start') || '');
   const end = String(data.get('end') || '');
   if (end && new Date(end).getTime() <= Date.now()) return showToast('End date & time must be in the future.');
@@ -123,7 +125,7 @@ async function saveConfig(event) {
   const expiredPublishedQuiz = wasEnded && state.questionsPublished && !state.quizStopped;
   teacherMutationInFlight = true;
   try {
-    state.config = { courseName: state.config.courseName || '', courseCode: state.config.courseCode || '', totalQuestions: state.questions.length, duration: Number(data.get('duration')) || 0, start, end };
+    state.config = { courseName: state.config.courseName || '', courseCode: state.config.courseCode || '', totalQuestions: state.questions.length, duration, start, end };
     state.configSaved = true;
     if (expiredPublishedQuiz) {
       state.currentQuizId = null;
@@ -135,13 +137,15 @@ async function saveConfig(event) {
       Object.values(state.studentSessions).forEach(studentSession => { if (!studentSession.started) studentSession.remaining = Math.max(60, state.config.duration * 60); });
     }
     delete state.drafts.config;
-    saveState();
-    try {
-      await persistQuizControlState();
-      await confirmSavedConfiguration(true);
-    } catch (error) {
-      if (!(await confirmSavedConfiguration(true))) throw error;
-    }
+    saveState({ localOnly: true });
+    await persistQuizState(state, 'teacher', { waitForSync: true });
+    await persistQuizControlState();
+    await confirmSavedConfiguration({
+      ...state.config,
+      currentQuizId: state.currentQuizId,
+      questionsPublished: state.questionsPublished,
+      quizStopped: state.quizStopped
+    });
     addActivity(expiredPublishedQuiz ? 'Expired quiz questions are ready as a new draft' : 'Quiz configuration was updated', 'settings');
     showToast(expiredPublishedQuiz ? 'Configuration saved. Submit the saved questions to create the new quiz.' : 'Quiz configuration saved.');
   } catch (error) {
@@ -334,11 +338,22 @@ const CONFIG_CONFIRM_INTERVAL = 7500;
 async function confirmSavedConfiguration(expected, expectedQuestionCount = null) {
   for (let attempt = 0; attempt < CONFIG_CONFIRM_ATTEMPTS; attempt++) {
     if (attempt) await new Promise(resolve => setTimeout(resolve, CONFIG_CONFIRM_INTERVAL));
-    const { data, error } = await supabase.from('quiz_config').select('quiz_id, published, total_questions, duration, start_time, end_time').eq('id', 1).maybeSingle();
+    const { data, error } = await supabase.from('quiz_config').select('course_name, course_code, quiz_id, published, stopped, total_questions, duration, start_time, end_time').eq('id', 1).maybeSingle();
     if (error) continue;
     const hasTimingRules = Boolean(Number(data?.duration) || data?.start_time || data?.end_time);
     const questionCountMatches = expectedQuestionCount === null || Number(data?.total_questions) === expectedQuestionCount;
-    const confirmed = expected ? hasTimingRules && questionCountMatches : !hasTimingRules && !data?.published && !data?.quiz_id && questionCountMatches;
+    const confirmed = typeof expected === 'object'
+      ? Boolean(data)
+        && cleanLiveCourseValue(data.course_name, 'Course') === expected.courseName
+        && cleanLiveCourseValue(data.course_code, '34') === expected.courseCode
+        && Number(data.total_questions) === Number(expected.totalQuestions)
+        && Number(data.duration) === Number(expected.duration)
+        && (data.start_time ? Date.parse(data.start_time) : null) === (expected.start ? new Date(expected.start).getTime() : null)
+        && (data.end_time ? Date.parse(data.end_time) : null) === (expected.end ? new Date(expected.end).getTime() : null)
+        && (data.quiz_id || null) === expected.currentQuizId
+        && Boolean(data.published) === expected.questionsPublished
+        && Boolean(data.stopped) === expected.quizStopped
+      : expected ? hasTimingRules && questionCountMatches : !hasTimingRules && !data?.published && !data?.quiz_id && questionCountMatches;
     if (confirmed) return;
   }
   throw new Error(`Supabase did not confirm that the configuration was ${expected ? 'saved' : 'reset'} after ${CONFIG_CONFIRM_ATTEMPTS} checks over 30 seconds.`);
