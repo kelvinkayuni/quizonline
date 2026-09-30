@@ -71,7 +71,8 @@ tr:last-child td { border: 0; }
 .activity-icon { display: grid; place-items: center; width: 29px; height: 29px; border-radius: 8px; background: var(--teal-soft); color: var(--teal); }
 .activity-time { color: var(--muted); font: 10px DM Mono, monospace; }
 .form-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
-.short-answer-form-grid { grid-template-columns: minmax(0, 1fr) 84px; }
+.short-answer-form-grid { grid-template-columns: minmax(0, 1fr) 84px; align-items: start; }
+.short-answer-form-grid .field > input { height: 42px; }
 .short-answer-form-grid .field:last-child input { max-width: 84px; }
 .field { display: grid; gap: 7px; }
 .field.full { grid-column: 1 / -1; }
