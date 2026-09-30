@@ -859,23 +859,34 @@ async function handleLogin(event) {
 async function logout() {
   stopTimer();
   if (session?.role === 'student') {
-    saveStudentSession({ localOnly: true });
     const studentSession = session;
-    if (session.originalQuestions) state.questions = session.originalQuestions;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
-    try {
-      await flushStudentAttemptSave(studentSession);
-    } catch (error) {
-      if (error.code === 'claimed') {
-        relinquishClaimedStudentAttempt(studentSession);
-        return;
-      }
-      if (error.code === 'revision' || error.code === 'attempt_conflict') {
-        showToast('Signed out with local progress preserved. On the next sign-in, the app will restore the latest Supabase progress and safely recover any compatible local progress.', 'error');
+    if (!studentSession.completed && studentSession.started) {
+      saveStudentSession({ localOnly: true });
+      if (studentSession.originalQuestions) state.questions = studentSession.originalQuestions;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+      const hasAttemptClaim = studentSession.attemptGeneration != null
+        && studentSession.attemptRevision != null
+        && studentSession.attemptOwnerToken;
+      if (hasAttemptClaim) {
+        try {
+          await flushStudentAttemptSave(studentSession);
+        } catch (error) {
+          if (error.code === 'claimed') {
+            relinquishClaimedStudentAttempt(studentSession);
+            return;
+          }
+          if (error.code === 'revision' || error.code === 'attempt_conflict') {
+            showToast('Signed out with local progress preserved. On the next sign-in, the app will restore the latest Supabase progress and safely recover any compatible local progress.', 'error');
+          } else {
+            showToast(`Sign-out cancelled so this quiz stays open until progress is saved: ${error.message || error}`, 'error');
+            app();
+            return;
+          }
+        }
       } else {
-        showToast(`Sign-out cancelled so this quiz stays open until progress is saved: ${error.message || error}`, 'error');
-        app();
-        return;
+        studentSession.attemptRequiresRemoteRestore = true;
+        state.studentSessions[studentSession.username] = { ...studentSession };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
       }
     }
     void markStudentOffline(studentSession.username, studentSession.quizId);
