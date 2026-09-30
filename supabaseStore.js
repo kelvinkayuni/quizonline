@@ -97,6 +97,10 @@ export async function persistStudentAttempt(studentSession) {
     if (data?.reason !== 'revision' || !isSafeAttemptExtension(attemptData, data.attempt_data)) {
       const saveError = new Error('A newer progress version exists and cannot safely be merged. Keep this page open and sign in again to load the latest saved progress.');
       saveError.code = data?.reason || 'attempt_conflict';
+      if (data?.reason === 'revision' && data.attempt_data) {
+        saveError.remoteAttempt = data.attempt_data;
+        saveError.remoteRevision = Number(data.revision);
+      }
       throw saveError;
     }
     expectedRevision = Number(data.revision);
@@ -125,6 +129,20 @@ function isSafeAttemptExtension(localAttempt, remoteAttempt) {
       && JSON.stringify(localAttempt.feedback) !== JSON.stringify(remoteAttempt.feedback)) return false;
   }
   return true;
+}
+
+export function reconcileStudentAttempt(localSession, remoteAttempt) {
+  const localAttempt = attemptDataFromSession(localSession);
+  if (!remoteAttempt?.started || !localAttempt.started) {
+    return { attempt: remoteAttempt?.started ? remoteAttempt : localAttempt, conflict: false };
+  }
+  if (!localSession.attemptRequiresRemoteRestore && isSafeAttemptExtension(localAttempt, remoteAttempt)) {
+    return { attempt: localAttempt, conflict: false };
+  }
+  if (isSafeAttemptExtension(remoteAttempt, localAttempt)) {
+    return { attempt: remoteAttempt, conflict: false };
+  }
+  return { attempt: remoteAttempt, conflict: true };
 }
 
 export async function deleteStudentAttempt(studentSession) {

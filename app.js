@@ -1,7 +1,7 @@
 function courseDisplayValue(value) { const normalized = String(value || '').trim(); return normalized === '34' || normalized.toLowerCase() === 'course' ? '' : normalized; }
 function studentCourseDetails() { const courseName = courseDisplayValue(state.config.courseName); const courseCode = courseDisplayValue(state.config.courseCode); return courseName || courseCode ? `<div class="course-banner">${courseName ? `<strong>${esc(courseName)}</strong>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''; }
 import { supabase } from './supabase.js';
-import { claimStudentAttempt, deleteQuizAttempts, deleteStudentAttempt, hydrateQuizState, persistActivityClear, persistQuestionToSupabase, persistQuizState, persistStudentAttempt } from './supabaseStore.js';
+import { claimStudentAttempt, deleteQuizAttempts, deleteStudentAttempt, hydrateQuizState, persistActivityClear, persistQuestionToSupabase, persistQuizState, persistStudentAttempt, reconcileStudentAttempt } from './supabaseStore.js';
 import { loadLiveStudentUsernames, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { shortAnswerMatchScore } from './shortAnswerMatching.js';
 
@@ -277,6 +277,10 @@ function syncStudentAttempt(targetSession) {
 }
 
 function reportStudentAttemptSaveError(targetSession, error) {
+  if (error?.code === 'claimed') {
+    relinquishClaimedStudentAttempt(targetSession);
+    return;
+  }
   const message = error?.message || String(error);
   const shouldNotify = targetSession.attemptSyncError !== message;
   targetSession.attemptSyncError = message;
@@ -285,6 +289,18 @@ function reportStudentAttemptSaveError(targetSession, error) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
     if (shouldNotify) showToast(`Quiz progress has not synced to Supabase: ${message}`, 'error');
   }
+}
+
+function relinquishClaimedStudentAttempt(targetSession) {
+  targetSession.attemptRequiresRemoteRestore = true;
+  state.studentSessions[targetSession.username] = { ...targetSession };
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+  if (session !== targetSession) return;
+  stopTimer();
+  session = null;
+  saveWindowSession();
+  showToast('This attempt was opened on another device. This device has been signed out; sign in again to load the current saved progress.', 'error');
+  app();
 }
 
 async function flushStudentAttemptSave(targetSession = session) {
@@ -541,6 +557,10 @@ async function startStudentQuiz() {
   try {
     await flushStudentAttemptSave();
   } catch (error) {
+    if (error.code === 'claimed') {
+      relinquishClaimedStudentAttempt(session);
+      return;
+    }
     session.started = false;
     session.deadlineAt = null;
     session.remaining = Math.max(60, Number(state.config.duration) * 60);
@@ -776,19 +796,25 @@ async function handleLogin(event) {
     try {
       const claimedAttempt = await claimStudentAttempt(state.currentQuizId, student.username, password, initialSession);
       const remoteAttempt = claimedAttempt.data || {};
-      const remoteQuestionOrder = Array.isArray(remoteAttempt.questionOrderIds)
-        ? remoteAttempt.questionOrderIds.map(id => originalQuestions.find(question => question.id === id)).filter(Boolean)
+      const reconciliation = reconcileStudentAttempt(initialSession, remoteAttempt);
+      const restoredAttempt = reconciliation.attempt || {};
+      const restoredQuestionOrder = Array.isArray(restoredAttempt.questionOrderIds)
+        ? restoredAttempt.questionOrderIds.map(id => originalQuestions.find(question => question.id === id)).filter(Boolean)
         : [];
       savedSession = {
         ...initialSession,
-        ...remoteAttempt,
+        ...restoredAttempt,
         username: student.username,
         quizId: state.currentQuizId,
-        questionOrder: remoteQuestionOrder.length === originalQuestions.length ? remoteQuestionOrder : initialQuestionOrder,
+        questionOrder: restoredQuestionOrder.length === originalQuestions.length ? restoredQuestionOrder : initialQuestionOrder,
         attemptGeneration: claimedAttempt.generation,
         attemptRevision: claimedAttempt.revision,
-        attemptOwnerToken: claimedAttempt.ownerToken
+        attemptOwnerToken: claimedAttempt.ownerToken,
+        attemptRequiresRemoteRestore: false
       };
+      if (reconciliation.conflict) {
+        showToast('The local and Supabase progress could not be safely merged. The latest Supabase-saved progress was restored; conflicting local changes were not applied.', 'error');
+      }
     } catch (error) {
       showToast(`Your saved quiz progress could not be loaded from Supabase: ${error.message || error}`, 'error');
       return;
@@ -841,15 +867,16 @@ async function logout() {
       await flushStudentAttemptSave(studentSession);
     } catch (error) {
       if (error.code === 'claimed') {
-        session = null;
-        saveWindowSession();
-        showToast(`This device was signed out because the attempt is active on another device. Its latest local progress was not uploaded.`, 'error');
+        relinquishClaimedStudentAttempt(studentSession);
+        return;
+      }
+      if (error.code === 'revision' || error.code === 'attempt_conflict') {
+        showToast('Signed out with local progress preserved. On the next sign-in, the app will restore the latest Supabase progress and safely recover any compatible local progress.', 'error');
+      } else {
+        showToast(`Sign-out cancelled so this quiz stays open until progress is saved: ${error.message || error}`, 'error');
         app();
         return;
       }
-      showToast(`Sign-out cancelled so this quiz stays open until progress is saved: ${error.message || error}`, 'error');
-      app();
-      return;
     }
     void markStudentOffline(studentSession.username, studentSession.quizId);
     state.users = state.users.map(user => user.username === studentSession.username
@@ -1303,15 +1330,42 @@ function finalizeStudentResult(studentSession, autoSubmitted) {
 async function finishQuiz(autoSubmitted) {
   stopTimer();
   if (!session || session.completed) return;
+  let progressSaveError = null;
+  let usedConfirmedRemoteProgress = false;
   try {
     await flushStudentAttemptSave(session);
   } catch (error) {
-    session.attemptSyncError = error.message || String(error);
-    state.studentSessions[session.username] = { ...session };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
-    showToast(`The quiz was not submitted because the latest progress could not be confirmed in Supabase: ${error.message || error}`, 'error');
-    app();
-    return;
+    if (error.code === 'claimed') {
+      relinquishClaimedStudentAttempt(session);
+      return;
+    }
+    if (autoSubmitted) {
+      progressSaveError = error;
+      const remoteAttempt = error.remoteAttempt;
+      if (remoteAttempt?.started && Array.isArray(remoteAttempt.questionOrderIds)) {
+        const questionOrder = remoteAttempt.questionOrderIds
+          .map(id => session.originalQuestions?.find(question => question.id === id))
+          .filter(Boolean);
+        if (questionOrder.length === remoteAttempt.questionOrderIds.length) {
+          session = {
+            ...session,
+            ...remoteAttempt,
+            remaining: session.remaining,
+            questionOrder,
+            attemptRevision: error.remoteRevision
+          };
+          state.questions = questionOrder;
+          usedConfirmedRemoteProgress = true;
+        }
+      }
+    } else {
+      session.attemptSyncError = error.message || String(error);
+      state.studentSessions[session.username] = { ...session };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+      showToast(`The quiz was not submitted because the latest progress could not be confirmed in Supabase: ${error.message || error}`, 'error');
+      app();
+      return;
+    }
   }
   const result = finalizeStudentResult(session, autoSubmitted);
   session.completed = true;
@@ -1320,14 +1374,22 @@ async function finishQuiz(autoSubmitted) {
   state.activity.unshift({ text: `${session.username} ${autoSubmitted ? 'was auto-submitted' : 'completed the quiz'}`, type: 'check', time: new Date().toISOString() });
   state.activity = state.activity.slice(0, 20);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  const progressSource = usedConfirmedRemoteProgress
+    ? 'the latest progress returned by Supabase'
+    : "this device's saved progress";
   try {
     await persistQuizState(state, 'student', { waitForSync: true, username: session.username });
     await deleteStudentAttempt(session);
     delete state.studentSessions[session.username];
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
-    showToast('Your answers were saved successfully.');
+    showToast(progressSaveError
+      ? `Your answers were submitted using ${progressSource} and saved successfully. The progress save conflict was: ${progressSaveError.message || progressSaveError}`
+      : 'Your answers were saved successfully.');
   } catch (error) {
-    showToast(`Your result was saved locally, but Supabase synchronization or attempt cleanup failed: ${error.message || error}`, 'error');
+    const progressNotice = progressSaveError
+      ? ` The submitted answers used ${progressSource}; the progress save conflict was: ${progressSaveError.message || progressSaveError}.`
+      : '';
+    showToast(`Your result was saved locally, but Supabase synchronization or attempt cleanup failed: ${error.message || error}.${progressNotice}`, 'error');
   }
   app();
 }
