@@ -25,7 +25,7 @@ An internet connection is needed for Supabase, Google Fonts, and the SheetJS CDN
 - Teacher-only question-corrections PDF downloads with answer keys from the saved question bank.
 - Short-answer questions keep expected concepts for marking separate from an optional teacher reference answer.
 - Student quiz flow with one question at a time, submit-gated feedback, timer, automatic submission, and no retakes after completion.
-- Before starting a published quiz, the student sign-in flow checks Supabase directly for a result matching that exact username and quiz ID; if the check fails, it blocks a new attempt rather than assuming the student has not completed the quiz.
+- Before starting a published quiz, the student sign-in flow checks Supabase directly for a result matching that exact username and quiz ID; if the check fails, it blocks a new attempt rather than assuming the student has not completed the quiz. At completion, the app confirms the saved result row with Supabase before treating submission as complete; if confirmation fails, the student gets a retry state and the active attempt is retained.
 - Questions, quiz configuration, imported student accounts, and completed attempts synchronize with Supabase. Active student quiz progress is saved in a dedicated Supabase table so it can resume on another device; browser login sessions remain browser-local.
 - `.xlsx` student import and results download through SheetJS.
 

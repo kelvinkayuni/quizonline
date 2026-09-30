@@ -1,7 +1,7 @@
 function courseDisplayValue(value) { const normalized = String(value || '').trim(); return normalized === '34' || normalized.toLowerCase() === 'course' ? '' : normalized; }
 function studentCourseDetails() { const courseName = courseDisplayValue(state.config.courseName); const courseCode = courseDisplayValue(state.config.courseCode); return courseName || courseCode ? `<div class="course-banner">${courseName ? `<strong>${esc(courseName)}</strong>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''; }
 import { supabase } from './supabase.js';
-import { claimStudentAttempt, deleteQuizAttempts, deleteStudentAttempt, hydrateQuizState, loadStudentQuizResult, persistActivityClear, persistQuestionToSupabase, persistQuizState, persistStudentAttempt, reconcileStudentAttempt } from './supabaseStore.js';
+import { claimStudentAttempt, deleteQuizAttempts, deleteStudentAttempt, hydrateQuizState, loadStudentQuizResult, persistActivityClear, persistQuestionToSupabase, persistQuizState, persistStudentAttempt, persistStudentQuizResult, reconcileStudentAttempt } from './supabaseStore.js';
 import { loadLiveStudentUsernames, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { shortAnswerMatchScore } from './shortAnswerMatching.js';
 
@@ -585,7 +585,7 @@ async function startStudentQuiz() {
 }
 function studentAccountWithoutQuiz() { const history = state.studentHistory.filter(item => item.username === session.username); return `<main class="main"><div class="quiz-shell"><div class="quiz-top"><div><div class="brand"><span class="brand-mark">OQ</span><strong>ONLINE QUIZ</strong></div><p class="subtle" style="margin:14px 0 0">${esc(session.username)} · Student account</p></div><div class="student-actions"><button class="btn btn-secondary btn-small" data-action="logout">Sign out</button><button class="btn btn-secondary btn-small" data-action="view-student-history">View quiz history</button><button class="btn btn-secondary btn-small" data-action="download-student-history" ${history.length ? '' : 'disabled'}>Download history</button></div></div><section class="card result-hero"><div class="eyebrow kicker">No active assessment</div><h2>Your student account is ready.</h2><p class="subtle">There is no quiz available right now. You can still review your previous quiz history below.</p>${studentSchedule()}</section><section class="card panel student-history-panel" id="student-history-panel"><div class="panel-head"><div><h2>Quiz history</h2><p class="subtle">Your records can be viewed or downloaded, but not deleted.</p></div></div>${studentHistoryTable(history)}</section></div></main>`; }
 function studentSchedule() { const config = state.config; const courseName = courseDisplayValue(config.courseName); const courseCode = courseDisplayValue(config.courseCode); return `${courseName || courseCode ? `<div style="margin:24px 0 0;text-align:left">${courseName ? `<h3 style="margin:7px 0 0">${esc(courseName)}</h3>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''}<div class="grid" style="grid-template-columns:repeat(3,1fr);gap:12px;margin:24px 0 0;text-align:left"><div><div class="eyebrow">Starts</div><strong style="display:block;margin-top:7px">${config.start ? esc(formatDate(config.start)) : 'Not scheduled'}</strong></div><div><div class="eyebrow">Ends</div><strong style="display:block;margin-top:7px">${config.end ? esc(formatDate(config.end)) : 'No deadline'}</strong></div><div><div class="eyebrow">Time limit</div><strong style="display:block;margin-top:7px">${config.duration ? `${config.duration} minutes` : 'Not set'}</strong></div></div>`; }
-function studentResult() { const result = session.result || state.results.find(item => item.username === session.username); const history = state.studentHistory.filter(item => item.username === session.username); const percentage = result?.percentage ?? 0; const passed = percentage >= 50; return `<main class="main"><div class="quiz-shell"><div class="quiz-top"><div class="brand"><span class="brand-mark">OQ</span><strong>ONLINE QUIZ</strong></div><div class="student-actions"><button class="btn btn-secondary btn-small" data-action="view-student-history">View quiz history</button><button class="btn btn-secondary btn-small" data-action="download-student-history" ${history.length ? '' : 'disabled'}>Download history</button><button class="btn btn-secondary btn-small" data-action="logout">Sign out</button></div></div><section class="card result-hero"><div class="eyebrow kicker">Assessment complete</div><div class="score-big">${percentage}%</div><h2>${passed ? 'WELL DONE' : 'NOT GOOD'}, ${esc(session.username)}.</h2><p class="subtle">Your answers have been recorded. This attempt is final and cannot be retaken.</p><div class="grid" style="grid-template-columns:repeat(3,1fr);margin:30px 0;text-align:left"><div><div class="eyebrow">Score</div><strong>${result ? result.score : 0}/${result ? result.totalMarks : 0}</strong></div><div><div class="eyebrow">Attempted</div><strong>${result ? result.attempted : 0}</strong></div><div><div class="eyebrow">Incorrect</div><strong>${result ? result.incorrect : 0}</strong></div></div></section><section class="card panel student-history-panel" id="student-history-panel"><div class="panel-head"><div><h2>Quiz history</h2><p class="subtle">Your records can be viewed or downloaded, but not deleted.</p></div></div>${studentHistoryTable(history)}</section></div></main>`; }
+function studentResult() { const result = session.result || state.results.find(item => item.username === session.username); const history = state.studentHistory.filter(item => item.username === session.username); const percentage = result?.percentage ?? 0; const passed = percentage >= 50; const pending = Boolean(session.resultSyncPending); return `<main class="main"><div class="quiz-shell"><div class="quiz-top"><div class="brand"><span class="brand-mark">OQ</span><strong>ONLINE QUIZ</strong></div><div class="student-actions"><button class="btn btn-secondary btn-small" data-action="view-student-history">View student history</button><button class="btn btn-secondary btn-small" data-action="download-student-history" ${history.length ? '' : 'disabled'}>Download history</button>${pending ? '' : '<button class="btn btn-secondary btn-small" data-action="logout">Sign out</button>'}</div></div><section class="card result-hero"><div class="eyebrow kicker">${pending ? 'Submission not confirmed' : 'Assessment complete'}</div><div class="score-big">${percentage}%</div><h2>${passed ? 'WELL DONE' : 'NOT GOOD'}, ${esc(session.username)}.</h2><p class="subtle">${pending ? `Supabase has not confirmed this result yet. Keep this page open and retry the save; do not start this quiz again on another device until confirmation. ${esc(session.resultSyncError || '')}` : 'Your answers have been recorded. This attempt is final and cannot be retaken.'}</p>${pending ? '<button class="btn btn-primary" data-action="retry-result-save">Retry result save</button>' : ''}<div class="grid" style="grid-template-columns:repeat(3,1fr);margin:30px 0;text-align:left"><div><div class="eyebrow">Score</div><strong>${result ? result.score : 0}/${result ? result.totalMarks : 0}</strong></div><div><div class="eyebrow">Attempted</div><strong>${result ? result.attempted : 0}</strong></div><div><div class="eyebrow">Incorrect</div><strong>${result ? result.incorrect : 0}</strong></div></div></section><section class="card panel student-history-panel" id="student-history-panel"><div class="panel-head"><div><h2>Quiz history</h2><p class="subtle">Your records can be viewed or downloaded, but not deleted.</p></div></div>${studentHistoryTable(history)}</section></div></main>`; }
 function studentHistoryTable(history) { if (!history.length) return '<div class="empty">No completed quiz history yet.</div>'; return `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Duration</th><th>Attempted</th><th>Right</th><th>Wrong</th><th>Marks scored</th></tr></thead><tbody>${history.map(item => `<tr><td>${formatDate(item.completedAt)}</td><td>${item.durationMinutes || 0} min</td><td>${item.attempted}</td><td>${item.correct ?? Math.max(0, item.attempted - item.incorrect)}</td><td>${item.incorrect}</td><td><strong>${item.score}/${item.totalMarks}</strong></td></tr>`).join('')}</tbody></table></div>`; }
 function formatTime(totalSeconds) { const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0'); const seconds = Math.max(0, totalSeconds % 60).toString().padStart(2, '0'); return `${minutes}:${seconds}`; }
 function addActivity(text, type = 'book') { state.activity.unshift({ text, type, time: new Date().toISOString() }); state.activity = state.activity.slice(0, 20); saveState(); }
@@ -746,6 +746,7 @@ function bindEvents() { applyBranding(); const totalQuestionsField = document.qu
   const clearHealth = document.querySelector('[data-action="clear-health"]'); if (clearHealth) clearHealth.addEventListener('click', clearAssessmentHealth);
   const clearActivity = document.querySelector('[data-action="clear-activity"]'); if (clearActivity) clearActivity.addEventListener('click', clearRecentActivity);
   const startQuiz = document.querySelector('[data-action="start-quiz"]'); if (startQuiz) startQuiz.addEventListener('click', startStudentQuiz);
+  const retryResultSave = document.querySelector('[data-action="retry-result-save"]'); if (retryResultSave) retryResultSave.addEventListener('click', () => { if (session?.resultSyncPending) void finishQuiz(Boolean(session.resultAutoSubmitted)); });
   const resultSelect = document.querySelector('#result-file-select'); if (resultSelect) resultSelect.addEventListener('change', () => { selectedResultFileId = resultSelect.value; app(); });
   const addChoice = document.querySelector('[data-action="add-choice"]'); if (addChoice) addChoice.addEventListener('click', () => { const choices = document.querySelectorAll('[data-choice]'); const index = choices.length; if (index >= 8) return showToast('A question can have up to 8 choices.'); document.querySelector('#choices').insertAdjacentHTML('beforeend', choiceInput(index)); const row = document.querySelectorAll('.choice-row')[index]; row.querySelector('[data-action="remove-choice"]').addEventListener('click', () => { row.remove(); renumberChoices(); }); syncCorrectOptions(); updateChoiceCount(); });
   document.querySelectorAll('[data-action="remove-choice"]').forEach(button => button.addEventListener('click', () => { const choices = document.querySelectorAll('[data-choice]'); if (choices.length <= 2) return showToast('Keep at least two choices.'); button.closest('.choice-row').remove(); renumberChoices(); }));
@@ -879,6 +880,10 @@ async function handleLogin(event) {
 async function logout() {
   stopTimer();
   if (session?.role === 'student') {
+    if (session.resultSyncPending) {
+      showToast('This result has not been confirmed in Supabase. Retry saving it before signing out.', 'error');
+      return;
+    }
     const studentSession = session;
     if (!studentSession.completed && studentSession.started) {
       saveStudentSession({ localOnly: true });
@@ -1360,67 +1365,104 @@ function finalizeStudentResult(studentSession, autoSubmitted) {
 
 async function finishQuiz(autoSubmitted) {
   stopTimer();
-  if (!session || session.completed) return;
+  if (!session || (session.completed && !session.resultSyncPending)) return;
+  const retryingResultSave = Boolean(session.resultSyncPending);
   let progressSaveError = null;
   let usedConfirmedRemoteProgress = false;
-  try {
-    await flushStudentAttemptSave(session);
-  } catch (error) {
-    if (error.code === 'claimed') {
-      relinquishClaimedStudentAttempt(session);
-      return;
-    }
-    if (autoSubmitted) {
-      progressSaveError = error;
-      const remoteAttempt = error.remoteAttempt;
-      if (remoteAttempt?.started && Array.isArray(remoteAttempt.questionOrderIds)) {
-        const questionOrder = remoteAttempt.questionOrderIds
-          .map(id => session.originalQuestions?.find(question => question.id === id))
-          .filter(Boolean);
-        if (questionOrder.length === remoteAttempt.questionOrderIds.length) {
-          session = {
-            ...session,
-            ...remoteAttempt,
-            remaining: session.remaining,
-            questionOrder,
-            attemptRevision: error.remoteRevision
-          };
-          state.questions = questionOrder;
-          usedConfirmedRemoteProgress = true;
-        }
+  if (!retryingResultSave) {
+    try {
+      await flushStudentAttemptSave(session);
+    } catch (error) {
+      if (error.code === 'claimed') {
+        relinquishClaimedStudentAttempt(session);
+        return;
       }
-    } else {
-      session.attemptSyncError = error.message || String(error);
-      state.studentSessions[session.username] = { ...session };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
-      showToast(`The quiz was not submitted because the latest progress could not be confirmed in Supabase: ${error.message || error}`, 'error');
-      app();
-      return;
+      if (autoSubmitted) {
+        progressSaveError = error;
+        const remoteAttempt = error.remoteAttempt;
+        if (remoteAttempt?.started && Array.isArray(remoteAttempt.questionOrderIds)) {
+          const questionOrder = remoteAttempt.questionOrderIds
+            .map(id => session.originalQuestions?.find(question => question.id === id))
+            .filter(Boolean);
+          if (questionOrder.length === remoteAttempt.questionOrderIds.length) {
+            session = {
+              ...session,
+              ...remoteAttempt,
+              remaining: session.remaining,
+              questionOrder,
+              attemptRevision: error.remoteRevision
+            };
+            state.questions = questionOrder;
+            usedConfirmedRemoteProgress = true;
+          }
+        }
+      } else {
+        session.attemptSyncError = error.message || String(error);
+        state.studentSessions[session.username] = { ...session };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+        showToast(`The quiz was not submitted because the latest progress could not be confirmed in Supabase: ${error.message || error}`, 'error');
+        app();
+        return;
+      }
     }
   }
-  const result = finalizeStudentResult(session, autoSubmitted);
+  const result = retryingResultSave
+    ? session.result
+    : finalizeStudentResult(session, autoSubmitted);
+  if (!result) {
+    showToast('The pending result is not available in this browser. Do not start another attempt; contact the teacher to recover the saved progress.', 'error');
+    return;
+  }
   session.completed = true;
   session.result = result;
+  session.resultAutoSubmitted = retryingResultSave
+    ? session.resultAutoSubmitted
+    : Boolean(autoSubmitted);
+  session.resultSyncPending = true;
   session.updatedAt = new Date().toISOString();
-  state.activity.unshift({ text: `${session.username} ${autoSubmitted ? 'was auto-submitted' : 'completed the quiz'}`, type: 'check', time: new Date().toISOString() });
-  state.activity = state.activity.slice(0, 20);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  if (!retryingResultSave) {
+    state.activity.unshift({ text: `${session.username} ${autoSubmitted ? 'was auto-submitted' : 'completed the quiz'}`, type: 'check', time: new Date().toISOString() });
+    state.activity = state.activity.slice(0, 20);
+  }
+  state.studentSessions[session.username] = { ...session };
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
   const progressSource = usedConfirmedRemoteProgress
     ? 'the latest progress returned by Supabase'
     : "this device's saved progress";
   try {
+    await persistStudentQuizResult(result);
+  } catch (error) {
+    session.resultSyncError = error.message || String(error);
+    state.studentSessions[session.username] = { ...session };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+    showToast(`Your result is not confirmed in Supabase yet. Keep this page open and retry: ${error.message || error}`, 'error');
+    app();
+    return;
+  }
+  session.resultSyncPending = false;
+  session.resultSyncError = '';
+  state.studentSessions[session.username] = { ...session };
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+
+  let synchronizationError = null;
+  try {
     await persistQuizState(state, 'student', { waitForSync: true, username: session.username });
+  } catch (error) {
+    synchronizationError = error;
+  }
+  try {
     await deleteStudentAttempt(session);
     delete state.studentSessions[session.username];
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+  } catch (error) {
+    synchronizationError = synchronizationError || error;
+  }
+  if (synchronizationError) {
+    showToast(`Your result is confirmed in Supabase, but result-file synchronization or active-attempt cleanup failed: ${synchronizationError.message || synchronizationError}`, 'error');
+  } else {
     showToast(progressSaveError
       ? `Your answers were submitted using ${progressSource} and saved successfully. The progress save conflict was: ${progressSaveError.message || progressSaveError}`
       : 'Your answers were saved successfully.');
-  } catch (error) {
-    const progressNotice = progressSaveError
-      ? ` The submitted answers used ${progressSource}; the progress save conflict was: ${progressSaveError.message || progressSaveError}.`
-      : '';
-    showToast(`Your result was saved locally, but Supabase synchronization or attempt cleanup failed: ${error.message || error}.${progressNotice}`, 'error');
   }
   app();
 }

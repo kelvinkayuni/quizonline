@@ -250,6 +250,37 @@ export async function loadStudentQuizResult(username, quizId) {
   return data ? normalizeAttempt(data) : null;
 }
 
+export async function persistStudentQuizResult(result) {
+  if (!result?.username || !result.quizId) {
+    throw new Error('The completed result is missing its student username or quiz ID.');
+  }
+  const { data, error } = await withTimeout(
+    supabase.from('quiz_attempts').upsert({
+      username: result.username,
+      quiz_id: result.quizId,
+      answers: result.answers || [],
+      score: result.score,
+      total_marks: result.totalMarks,
+      percentage: result.percentage,
+      completed_at: result.completedAt
+    }, { onConflict: 'username,quiz_id' })
+      .select('*')
+      .single(),
+    'Completed quiz result save'
+  );
+  if (error) throw error;
+  if (!data
+    || data.username !== result.username
+    || data.quiz_id !== result.quizId
+    || Date.parse(data.completed_at || '') !== Date.parse(result.completedAt || '')
+    || Number(data.score) !== Number(result.score)
+    || Number(data.total_marks) !== Number(result.totalMarks)
+    || Number(data.percentage) !== Number(result.percentage)) {
+    throw new Error('Supabase did not confirm the completed result for this student and quiz.');
+  }
+  return normalizeAttempt(data);
+}
+
 function sameQuestionRow(left, right) {
   return left.text === right.text
     && Number(left.correct) === Number(right.correct)
@@ -633,21 +664,6 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
     syncQueue = syncQueue.then(async () => {
       if (!stateToPersist) return;
       if (role === 'student') {
-        for (const result of stateToPersist.results) {
-          const attemptResult = await supabase.from('quiz_attempts').upsert({
-            username: result.username,
-            quiz_id: result.quizId || null,
-            answers: result.answers || [],
-            score: result.score,
-            total_marks: result.totalMarks,
-            percentage: result.percentage,
-            completed_at: result.completedAt
-          }, { onConflict: 'username,quiz_id' });
-          if (attemptResult.error) {
-            reportError('result synchronization', attemptResult.error);
-            if (optionsToPersist.waitForSync) throw attemptResult.error;
-          }
-        }
         const workspaceResult = await supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle();
         if (workspaceResult.error) {
           reportError('student workspace loading', workspaceResult.error);
