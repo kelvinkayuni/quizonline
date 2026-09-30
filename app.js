@@ -1,7 +1,7 @@
 function courseDisplayValue(value) { const normalized = String(value || '').trim(); return normalized === '34' || normalized.toLowerCase() === 'course' ? '' : normalized; }
 function studentCourseDetails() { const courseName = courseDisplayValue(state.config.courseName); const courseCode = courseDisplayValue(state.config.courseCode); return courseName || courseCode ? `<div class="course-banner">${courseName ? `<strong>${esc(courseName)}</strong>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''; }
 import { supabase } from './supabase.js';
-import { claimStudentAttempt, deleteQuizAttempts, hydrateQuizState, loadStudentQuizResult, persistActivityClear, persistQuestionToSupabase, persistQuizState, persistStudentAttempt, persistStudentQuizResult, reconcileStudentAttempt } from './supabaseStore.js';
+import { claimStudentAttempt, deleteQuizAttempts, hydrateQuizState, loadStudentQuizResult, persistActivityClear, persistQuestionToSupabase, persistQuizState, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt } from './supabaseStore.js';
 import { loadLiveStudentUsernames, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { shortAnswerMatchScore } from './shortAnswerMatching.js';
 
@@ -22,7 +22,7 @@ async function refreshStudentQuizState() {
 }
 
 async function stopQuizForEveryone() {
-  if (!state.questionsPublished || !state.currentQuizId || teacherMutationInFlight) return;
+  if (!state.questionsPublished || !state.currentQuizId || state.publishConfirmationPending || teacherMutationInFlight) return;
   teacherMutationInFlight = true;
     const stoppedQuizId = state.currentQuizId;
   try {
@@ -165,6 +165,7 @@ const TEACHER = { username: APP_USERNAME, password: APP_PASSWORD };
 const defaultState = {
   questions: [],
   questionsPublished: false,
+  publishConfirmationPending: null,
   quizStopped: false,
   users: [],
   results: [],
@@ -315,7 +316,7 @@ function toDateTimeLocal(value) { if (!value) return ''; const date = new Date(v
 function normalizeQuestion(row) { return { id: row.id, text: row.text, type: row.type === 'short-answer' ? 'short-answer' : 'multiple-choice', answer: String(row.answer || ''), choices: Array.isArray(row.choices) ? row.choices : [], correct: Number(row.correct) || 0, marks: Number(row.marks) || 1 }; }
 function restoreQuestionMetadata(questions, savedQuestions) { const savedById = new Map(savedQuestions.map(question => [question.id, question])); return questions.map(question => { const savedQuestion = savedById.get(question.id); return savedQuestion ? { ...question, ...savedQuestion, id: question.id } : question; }); }
 function shuffleQuestions(questions, seed = '') { const shuffled = [...questions]; let hash = 2166136261; for (const character of `${seed}:${state.currentQuizId || ''}`) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619); for (let index = shuffled.length - 1; index > 0; index--) { hash = Math.imul(hash ^ (hash >>> 13), 16777619); const swapIndex = (hash >>> 0) % (index + 1); [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]]; } return shuffled; }
-function quizIsLocked() { return Boolean(state.questionsPublished && !state.quizStopped && !quizHasEnded()); }
+function quizIsLocked() { return Boolean(state.publishConfirmationPending || (state.questionsPublished && !state.quizStopped && !quizHasEnded())); }
 function quizHasEnded() { return Boolean(state.config.end && Date.now() >= new Date(state.config.end).getTime()); }
 function quizHasNotStarted() { return Boolean(state.config.start && Date.now() < new Date(state.config.start).getTime()); }
 function showToast(message, type = 'info') { const toast = document.querySelector('#toast'); const isError = type === 'error' || /failed|could not|unable|error|timed out|not confirmed/i.test(message); toast.textContent = message; toast.classList.toggle('error', isError); toast.classList.add('show'); clearTimeout(showToast.timeout); showToast.timeout = setTimeout(() => toast.classList.remove('show'), isError ? 8000 : 2800); }
@@ -616,14 +617,34 @@ async function confirmSavedConfiguration(expected, expectedQuestionCount = null)
   throw new Error(`Supabase did not confirm that the configuration was ${expected ? 'saved' : 'reset'} after ${CONFIG_CONFIRM_ATTEMPTS} checks over 30 seconds.`);
 }
 async function confirmPublishedQuiz(quizId) {
-  for (let attempt = 0; attempt < 4; attempt++) {
-    if (attempt) await new Promise(resolve => setTimeout(resolve, 500));
-    const [configResult, workspaceResult] = await Promise.all([
-      supabase.from('quiz_config').select('quiz_id, published, stopped').eq('id', 1).maybeSingle(),
-      supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle()
-    ]);
-    if (configResult.error || workspaceResult.error) continue;
+  let matchingConfigObserved = false;
+  let readableConfigObserved = false;
+  let differentPublishedQuizObserved = false;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    if (attempt) await new Promise(resolve => setTimeout(resolve, 1000));
+    let configResult;
+    try {
+      configResult = await supabase.from('quiz_config').select('quiz_id, published, stopped').eq('id', 1).maybeSingle();
+    } catch {
+      continue;
+    }
+    if (configResult.error) continue;
+    readableConfigObserved = true;
+    const config = configResult.data;
+    const configMatches = config?.quiz_id === quizId && Boolean(config.published) && !config.stopped;
+    if (!configMatches) {
+      differentPublishedQuizObserved ||= Boolean(config?.published && config.quiz_id && config.quiz_id !== quizId && !config.stopped);
+      continue;
+    }
+    matchingConfigObserved = true;
 
+    let workspaceResult;
+    try {
+      workspaceResult = await supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle();
+    } catch {
+      continue;
+    }
+    if (workspaceResult.error) continue;
     const snapshot = workspaceResult.data?.data?.currentQuizQuestions;
     const questionsMatch = snapshot?.quizId === quizId
       && Array.isArray(snapshot.questions)
@@ -638,10 +659,75 @@ async function confirmPublishedQuiz(quizId) {
           && Number(saved.marks) === Number(question.marks)
           && JSON.stringify(saved.choices || []) === JSON.stringify(question.choices || []);
       });
-    const config = configResult.data;
-    if (config?.quiz_id === quizId && Boolean(config.published) && !config.stopped && questionsMatch) return true;
+    if (questionsMatch) return 'confirmed';
   }
-  return false;
+  if (matchingConfigObserved || !readableConfigObserved) return 'checking';
+  return differentPublishedQuizObserved ? 'conflict' : 'not-published';
+}
+async function publishQuestionsForStudents() {
+  if (state.publishConfirmationPending) {
+    await checkPendingQuizPublication();
+    return;
+  }
+  if (quizIsLocked()) return showToast('Stop the quiz before submitting new questions.');
+  if (!state.questions.length) return showToast('Add at least one saved question first.');
+  if (!state.config.totalQuestions || !state.config.duration) return showToast('Save quiz configuration before submitting questions.');
+  if (quizHasEnded()) return showToast('The quiz end time has passed. Update Quiz configuration, then submit again.');
+
+  state.questionsPublished = true;
+  state.quizStopped = false;
+  state.currentQuizId = `quiz-${Date.now()}`;
+  const submittedQuizId = state.currentQuizId;
+  state.publishConfirmationPending = submittedQuizId;
+  state.studentSessions = {};
+  state.healthClearedAt = null;
+  state.config.totalQuestions = Math.min(state.config.totalQuestions || state.questions.length, state.questions.length);
+  saveState({ localOnly: true });
+  app();
+
+  let syncError = null;
+  try {
+    await persistQuizState(state, 'teacher', { waitForSync: true, skipConfig: true });
+  } catch (error) {
+    syncError = error;
+  }
+  try {
+    await publishQuizAtomically(state, submittedQuizId);
+  } catch (error) {
+    syncError = syncError || error;
+  }
+  await finishQuizPublicationCheck(submittedQuizId, syncError);
+}
+async function checkPendingQuizPublication() {
+  const quizId = state.publishConfirmationPending;
+  if (!quizId) return;
+  await finishQuizPublicationCheck(quizId);
+}
+async function finishQuizPublicationCheck(quizId, publishError = null) {
+  let confirmation;
+  try {
+    confirmation = await confirmPublishedQuiz(quizId);
+  } catch (error) {
+    publishError = publishError || error;
+    confirmation = 'checking';
+  }
+  if (confirmation === 'confirmed') {
+    state.publishConfirmationPending = null;
+    saveState({ localOnly: true });
+    addActivity('Saved questions were submitted to students', 'check');
+    showToast('New quiz submitted. Students can start it now.');
+  } else if (confirmation === 'checking') {
+    showToast('Submission is still being checked. Do not submit again; check the status again shortly.', 'error');
+  } else if (confirmation === 'not-published') {
+    state.publishConfirmationPending = null;
+    state.questionsPublished = false;
+    state.currentQuizId = null;
+    saveState({ localOnly: true });
+    showToast(`Supabase confirmed that this quiz was not published. You can safely submit again.${publishError ? ` ${publishError.message || publishError}` : ''}`, 'error');
+  } else {
+    showToast(`A different quiz is currently published in Supabase. This submission remains locked for review; do not submit another quiz.${publishError ? ` ${publishError.message || publishError}` : ''}`, 'error');
+  }
+  app();
 }
 async function expireQuizDueToTimeLegacy() { if (!state.questionsPublished || !state.currentQuizId || teacherMutationInFlight || !quizHasEnded()) return; teacherMutationInFlight = true; try { state.questionsPublished = false; state.quizStopped = false; state.currentQuizId = null; state.configSaved = false; Object.keys(state.studentSessions).forEach(username => delete state.studentSessions[username]); saveState(); await persistQuizControlState(); await persistQuizState(state, 'teacher', { waitForSync: true }); await confirmSavedConfiguration(false); showToast('Quiz ended. The time set is available for a new configuration.'); } catch (error) { showToast(`Quiz end could not be confirmed: ${error.message || error}`); } finally { teacherMutationInFlight = false; app(); } }
 function healthResults() { return state.results.filter(result => result.quizId === state.currentQuizId && (!state.healthClearedAt || result.completedAt > state.healthClearedAt)); }
@@ -715,8 +801,18 @@ function bindEvents() { applyBranding(); const totalQuestionsField = document.qu
   if (session?.role === 'teacher' && teacherView === 'questions' && quizIsLocked()) {
     document.querySelectorAll('#question-form input, #question-form textarea, #question-form select, #question-form button, [data-action="clear-questions"], [data-action="publish-questions"], [data-action="edit-question"], [data-action="delete-question"]').forEach(control => { control.disabled = true; });
   }
+  if (session?.role === 'teacher' && teacherView === 'questions' && state.publishConfirmationPending) {
+    const publishButton = document.querySelector('[data-action="publish-questions"]');
+    if (publishButton) {
+      publishButton.textContent = teacherMutationInFlight ? 'Checking submission…' : 'Check submission status';
+      publishButton.disabled = teacherMutationInFlight;
+      if (!document.querySelector('[data-publish-status]')) {
+        publishButton.insertAdjacentHTML('afterend', '<p class="subtle" data-publish-status style="flex-basis:100%;margin:0">The submission is not yet confirmed. Do not submit a new quiz while this status is being checked.</p>');
+      }
+    }
+  }
   if (session?.role === 'teacher' && teacherView === 'questions' && (!state.questionsPublished || state.quizStopped)) document.querySelector('[data-action="stop-quiz"]')?.remove();
-  if (session?.role === 'teacher' && teacherView === 'questions' && state.questionsPublished && !state.quizStopped && !quizHasEnded()) document.querySelector('[data-action="publish-questions"]')?.insertAdjacentHTML('afterend', '<button class="btn btn-coral btn-small" data-action="stop-quiz">Stop Quiz</button>');
+  if (session?.role === 'teacher' && teacherView === 'questions' && state.questionsPublished && !state.quizStopped && !state.publishConfirmationPending && !quizHasEnded()) document.querySelector('[data-action="publish-questions"]')?.insertAdjacentHTML('afterend', '<button class="btn btn-coral btn-small" data-action="stop-quiz">Stop Quiz</button>');
   if (!session) document.querySelector('.hint')?.remove();
   if (session?.role === 'teacher' && teacherView === 'users' && !state.importedFile) document.querySelector('.upload')?.insertAdjacentHTML('afterend', '<div class="login-activation"><span><strong>Student login</strong><br><span class="subtle">Upload a workbook before activating student access.</span></span><button class="btn btn-secondary btn-small" disabled>Inactive</button></div>');
   document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => { teacherView = button.dataset.view; app(); }));
@@ -730,7 +826,7 @@ function bindEvents() { applyBranding(); const totalQuestionsField = document.qu
   document.querySelectorAll('[data-action="expand-question"]').forEach(button => button.addEventListener('click', () => { const id = button.dataset.id; if (expandedQuestionIds.has(id)) expandedQuestionIds.delete(id); else expandedQuestionIds.add(id); const details = document.querySelector(`#details-${id}`); details.classList.toggle('expanded'); button.textContent = details.classList.contains('expanded') ? 'Collapse' : 'Expand'; }));
   const downloadCorrectionsButton = document.querySelector('[data-action="download-corrections"]'); if (downloadCorrectionsButton) downloadCorrectionsButton.addEventListener('click', downloadCorrectionsPdf);
   const clearQuestions = document.querySelector('[data-action="clear-questions"]'); if (clearQuestions) clearQuestions.addEventListener('click', clearAllQuestions);
-  const publishQuestions = document.querySelector('[data-action="publish-questions"]'); if (publishQuestions) publishQuestions.addEventListener('click', () => { if (teacherMutationInFlight) return; teacherMutationInFlight = true; void publishQuestionsForStudents().finally(() => { teacherMutationInFlight = false; }); });
+  const publishQuestions = document.querySelector('[data-action="publish-questions"]'); if (publishQuestions) publishQuestions.addEventListener('click', () => { if (teacherMutationInFlight) return; teacherMutationInFlight = true; void publishQuestionsForStudents().finally(() => { teacherMutationInFlight = false; app(); }); });
   const stopQuiz = document.querySelector('[data-action="stop-quiz"]'); if (stopQuiz) stopQuiz.addEventListener('click', stopQuizForEveryone);
   const configForm = document.querySelector('#config-form'); if (configForm) configForm.addEventListener('submit', saveConfig);
   const resetConfig = document.querySelector('[data-action="reset-config"]'); if (resetConfig) resetConfig.addEventListener('click', resetQuizConfig);
@@ -1130,7 +1226,6 @@ async function clearAllQuestions() {
     app();
   }
 }
-async function publishQuestionsForStudents() { if (quizIsLocked()) return showToast('Stop the quiz before submitting new questions.'); if (!state.questions.length) return showToast('Add at least one saved question first.'); if (!state.config.totalQuestions || !state.config.duration) return showToast('Save quiz configuration before submitting questions.'); if (quizHasEnded()) return showToast('The quiz end time has passed. Update Quiz configuration, then submit again.'); state.questionsPublished = true; state.quizStopped = false; state.currentQuizId = `quiz-${Date.now()}`; const submittedQuizId = state.currentQuizId; state.studentSessions = {}; state.healthClearedAt = null; state.config.totalQuestions = Math.min(state.config.totalQuestions || state.questions.length, state.questions.length); saveState(); let syncError = null; try { await persistQuizControlState(); await persistQuizState(state, 'teacher', { waitForSync: true }); } catch (error) { syncError = error; } let confirmed = false; try { confirmed = await confirmPublishedQuiz(submittedQuizId); } catch (error) { syncError = syncError || error; } if (!confirmed) { state.questionsPublished = false; state.currentQuizId = null; localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage())); showToast(`Quiz submission could not be confirmed in Supabase${syncError ? `: ${syncError.message || syncError}` : '.'}`, 'error'); app(); return; } addActivity('Saved questions were submitted to students', 'check'); showToast('New quiz submitted. Students can start it now.'); app(); }
 async function stopQuizForEveryoneLegacy() { if (!state.questionsPublished || !state.currentQuizId || teacherMutationInFlight) return; teacherMutationInFlight = true; try { const stoppedQuizId = state.currentQuizId; state.deletedQuizIds = [...new Set([...state.deletedQuizIds, stoppedQuizId])]; state.results = state.results.filter(result => result.quizId !== stoppedQuizId); state.studentHistory = state.studentHistory.filter(result => result.quizId !== stoppedQuizId); state.resultFiles = state.resultFiles.filter(file => !file.id.includes(stoppedQuizId)); state.healthClearedAt = null; state.quizStopped = true; state.questionsPublished = false; state.currentQuizId = null; state.configSaved = false; Object.keys(state.studentSessions).forEach(username => delete state.studentSessions[username]); state.activity.unshift({ text: 'Quiz stopped for all students and its records were removed', type: 'results', time: new Date().toISOString() }); state.activity = state.activity.slice(0, 20); localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); await persistQuizControlState(); await persistQuizState(state, 'teacher', { waitForSync: true }); await confirmSavedConfiguration(false); const { data, error } = await supabase.from('quiz_config').select('quiz_id, published, stopped').eq('id', 1).maybeSingle(); if (error || !data || !data.stopped || data.published || data.quiz_id) throw error || new Error('Supabase did not confirm the stopped quiz state.'); showToast('Quiz stopped. You can edit the questions and submit an updated quiz.'); app(); } catch (error) { showToast(`Quiz stop could not be confirmed: ${error.message || error}`); } finally { teacherMutationInFlight = false; } }
 async function saveConfigLegacy(event) { event.preventDefault(); if (state.configSaved) return showToast('The time set is already saved.'); if (teacherMutationInFlight) return; const data = new FormData(event.target); const start = String(data.get('start') || ''); const end = String(data.get('end') || ''); if (end && new Date(end).getTime() <= Date.now()) return showToast('End date & time must be in the future.'); if (start && end && new Date(end).getTime() <= new Date(start).getTime()) return showToast('End date & time must be after the start date & time.'); const wasEnded = quizHasEnded(); const expiredPublishedQuiz = wasEnded && state.questionsPublished && !state.quizStopped; teacherMutationInFlight = true; try { state.config = { courseName: state.config.courseName || '', courseCode: state.config.courseCode || '', totalQuestions: Math.min(Number(data.get('totalQuestions')) || 0, state.questions.length), duration: Number(data.get('duration')) || 0, start, end }; state.configSaved = true; if (expiredPublishedQuiz) { state.currentQuizId = null; state.questionsPublished = false; state.quizStopped = false; state.studentSessions = {}; state.healthClearedAt = null; } else { Object.values(state.studentSessions).forEach(studentSession => { if (!studentSession.started) studentSession.remaining = Math.max(60, state.config.duration * 60); }); } delete state.drafts.config; saveState(); await persistQuizControlState(); await persistQuizState(state, 'teacher', { waitForSync: true }); await confirmSavedConfiguration(true); addActivity(expiredPublishedQuiz ? 'Expired quiz questions are ready as a new draft' : 'Quiz configuration was updated', 'settings'); showToast(expiredPublishedQuiz ? 'Configuration saved. Submit the saved questions to create the new quiz.' : 'Quiz configuration saved.'); } catch (error) { state.configSaved = false; saveState(); showToast(`Configuration could not be saved: ${error.message || error}`); } finally { teacherMutationInFlight = false; app(); } }
 async function resetQuizConfig() { if (teacherMutationInFlight) return; teacherMutationInFlight = true; const questionCount = state.questions.length; try { state.config = { courseName: state.config.courseName || '', courseCode: state.config.courseCode || '', totalQuestions: questionCount, duration: 0, start: '', end: '' }; state.configSaved = false; state.configResetAt = new Date().toISOString(); delete state.drafts.config; state.activity.unshift({ text: 'Quiz configuration was reset', type: 'settings', time: new Date().toISOString() }); state.activity = state.activity.slice(0, 20); localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage())); await persistQuizControlState(); await persistQuizState(state, 'teacher', { workspaceOnly: true, waitForSync: true }); await confirmSavedConfiguration(false, questionCount); showToast('Assessment rules reset.'); } catch (error) { showToast(`Assessment rules could not be reset: ${error.message || error}`); } finally { teacherMutationInFlight = false; app(); } }
@@ -1627,7 +1722,7 @@ refreshStudentQuizStateRaw = async function refreshQuestionTypesForStudent() {
 
 session = restoreWindowSession();
 if (!session) app();
-stateHydrationPromise = hydrateQuizState(state, session?.role, false, session?.username || '').finally(() => { reconcileStudentSession(); cacheHydratedState(); stateHydrated = true; app(); });
+stateHydrationPromise = hydrateQuizState(state, session?.role, false, session?.username || '').finally(() => { reconcileStudentSession(); cacheHydratedState(); stateHydrated = true; app(); if (session?.role === 'teacher' && state.publishConfirmationPending) { teacherMutationInFlight = true; app(); void checkPendingQuizPublication().finally(() => { teacherMutationInFlight = false; app(); }); } });
 document.addEventListener('submit', async event => {
   if (event.target?.id !== 'login-form') return;
   await stateHydrationPromise;

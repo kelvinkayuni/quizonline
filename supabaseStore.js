@@ -297,6 +297,34 @@ export async function persistStudentQuizResult(result, studentSession) {
   });
 }
 
+export async function publishQuizAtomically(state, quizId) {
+  const { data, error } = await withTimeout(
+    supabase.rpc('publish_quiz_atomically', {
+      p_quiz_id: quizId,
+      p_quiz_config: {
+        course_name: state.config.courseName || null,
+        course_code: state.config.courseCode || null,
+        total_questions: state.config.totalQuestions,
+        duration: state.config.duration,
+        start_time: toSupabaseTimestamp(state.config.start),
+        end_time: toSupabaseTimestamp(state.config.end),
+        quiz_id: quizId,
+        published: true,
+        stopped: false
+      },
+      p_question_snapshot: {
+        quizId,
+        questions: state.questions.map(questionForWorkspace)
+      }
+    }),
+    'Atomic quiz publication'
+  );
+  if (error) throw error;
+  if (data?.published !== true || data.quiz_id !== quizId) {
+    throw new Error('Supabase did not confirm the atomic quiz publication.');
+  }
+}
+
 function sameQuestionRow(left, right) {
   return left.text === right.text
     && Number(left.correct) === Number(right.correct)
