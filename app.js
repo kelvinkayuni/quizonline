@@ -1,7 +1,7 @@
 function courseDisplayValue(value) { const normalized = String(value || '').trim(); return normalized === '34' || normalized.toLowerCase() === 'course' ? '' : normalized; }
 function studentCourseDetails() { const courseName = courseDisplayValue(state.config.courseName); const courseCode = courseDisplayValue(state.config.courseCode); return courseName || courseCode ? `<div class="course-banner">${courseName ? `<strong>${esc(courseName)}</strong>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''; }
 import { supabase } from './supabase.js';
-import { claimStudentAttempt, deleteQuizAttempts, deleteStudentAttempt, hydrateQuizState, persistActivityClear, persistQuestionToSupabase, persistQuizState, persistStudentAttempt, reconcileStudentAttempt } from './supabaseStore.js';
+import { claimStudentAttempt, deleteQuizAttempts, deleteStudentAttempt, hydrateQuizState, loadStudentQuizResult, persistActivityClear, persistQuestionToSupabase, persistQuizState, persistStudentAttempt, reconcileStudentAttempt } from './supabaseStore.js';
 import { loadLiveStudentUsernames, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { shortAnswerMatchScore } from './shortAnswerMatching.js';
 
@@ -772,9 +772,18 @@ async function handleLogin(event) {
     ? state.users.find(user => user.username === importedUsername && user.password === password)
     : null;
   if (!student) return showToast('Incorrect Username or Password');
-  const previous = state.results.find(result => result.username === username
-    && state.questionsPublished && state.currentQuizId && result.quizId === state.currentQuizId);
+  let previous = null;
+  if (state.questionsPublished && state.currentQuizId) {
+    try {
+      previous = await loadStudentQuizResult(username, state.currentQuizId);
+    } catch (error) {
+      showToast(`Your completion status could not be confirmed, so the quiz was not started. Please retry when the connection is available: ${error.message || error}`, 'error');
+      return;
+    }
+  }
   if (previous) {
+    state.results = [...state.results.filter(result => !(result.username === username && result.quizId === previous.quizId)), previous];
+    state.studentHistory = [...state.studentHistory.filter(result => !(result.username === username && result.quizId === previous.quizId)), previous];
     session = { role: 'student', username: student.username, quizId: state.currentQuizId, completed: true, result: previous };
     app();
     return;

@@ -237,6 +237,19 @@ function normalizeAttempt(row) {
   };
 }
 
+export async function loadStudentQuizResult(username, quizId) {
+  const { data, error } = await withTimeout(
+    supabase.from('quiz_attempts')
+      .select('*')
+      .eq('username', username)
+      .eq('quiz_id', quizId)
+      .maybeSingle(),
+    'Student completion check'
+  );
+  if (error) throw error;
+  return data ? normalizeAttempt(data) : null;
+}
+
 function sameQuestionRow(left, right) {
   return left.text === right.text
     && Number(left.correct) === Number(right.correct)
