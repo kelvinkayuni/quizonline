@@ -238,7 +238,7 @@ function stateForLocalStorage() { if (session?.role !== 'student') return state;
 function saveState(options = {}) { localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage())); if (!options.localOnly) persistQuizState(state, session?.role, options); }
 function restoreState(snapshot) { state = snapshot; localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
 function saveTeacherDraft(form) { const values = {}; form.querySelectorAll('input, textarea, select').forEach(field => { if (!field.name) return; if (values[field.name] === undefined) values[field.name] = field.value; else values[field.name] = Array.isArray(values[field.name]) ? [...values[field.name], field.value] : [values[field.name], field.value]; }); state.drafts[teacherView] = values; saveState({ localOnly: form.id === 'question-form' || form.id === 'short-answer-form' }); }
-function restoreTeacherDrafts() { const draft = state.drafts[teacherView]; if (!draft) return; document.querySelectorAll('#question-form input, #question-form textarea, #question-form select, #config-form input, #config-form select').forEach(field => { const stored = draft[field.name]; if (stored === undefined) return; const index = [...document.querySelectorAll(`[name="${field.name}"]`)].indexOf(field); field.value = Array.isArray(stored) ? (stored[index] || '') : stored; }); }
+function restoreTeacherDrafts() { const draft = state.drafts[teacherView]; if (!draft) return; document.querySelectorAll('#question-form input, #question-form textarea, #question-form select, #short-answer-form input, #short-answer-form textarea, #short-answer-form select, #config-form input, #config-form select').forEach(field => { const stored = draft[field.name]; if (stored === undefined) return; const index = [...document.querySelectorAll(`[name="${field.name}"]`)].indexOf(field); field.value = Array.isArray(stored) ? (stored[index] || '') : stored; }); }
 function saveStudentSession() { if (session?.role === 'student' && !session.completed) { state.studentSessions[session.username] = { ...session }; saveState(); } }
 function clearStudentSession(username) { delete state.studentSessions[username]; saveState(); }
 function esc(value = '') { return String(value).replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[char])); }
@@ -288,8 +288,128 @@ async function refreshLiveStudents() { if (!session || session.role !== 'teacher
 async function refreshTeacherQuizState() { if (!session || session.role !== 'teacher' || teacherMutationInFlight) return; const { data, error } = await supabase.from('quiz_config').select('quiz_id, published, stopped, total_questions, duration, start_time, end_time, course_name, course_code').eq('id', 1).maybeSingle(); if (error || !data) return; const nextQuizId = data.quiz_id || null; const nextStopped = Boolean(data.stopped); const nextPublished = Boolean(data.published) && !nextStopped; const nextConfig = { ...state.config, courseName: data.course_name || '', courseCode: data.course_code || '', totalQuestions: Number(data.total_questions) || 0, duration: Number(data.duration) || 0, start: toDateTimeLocal(data.start_time), end: toDateTimeLocal(data.end_time) }; const changed = state.currentQuizId !== nextQuizId || state.quizStopped !== nextStopped || state.questionsPublished !== nextPublished || state.config.totalQuestions !== nextConfig.totalQuestions || state.config.duration !== nextConfig.duration || state.config.start !== nextConfig.start || state.config.end !== nextConfig.end; if (!changed) return; state.currentQuizId = nextQuizId; state.quizStopped = nextStopped; state.questionsPublished = nextPublished; state.config = nextConfig; if (teacherView === 'questions' || teacherView === 'overview') app(); }
 async function refreshStudentQuizStateRaw() { if (!session || session.role !== 'student') return; const [configResult, questionsResult, workspaceResult] = await Promise.all([supabase.from('quiz_config').select('quiz_id, published, stopped, total_questions, duration, start_time, end_time, course_name, course_code').eq('id', 1).maybeSingle(), supabase.from('questions').select('*').order('created_at'), supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle()]); if (questionsResult.error) return; const config = configResult.data; const workspace = workspaceResult.data?.data || {}; const previousQuizId = state.currentQuizId; const previousStopped = state.quizStopped; const previousPublished = state.questionsPublished; const previousQuestionCount = state.questions.length; state.questions = questionsResult.data.map(normalizeQuestion); state.currentQuizId = config?.quiz_id || null; state.quizStopped = Boolean(config?.stopped); state.questionsPublished = Boolean(config?.published) && !state.quizStopped && state.questions.length > 0; state.config = { ...state.config, courseName: config?.course_name || workspace.courseName || state.config.courseName || '', courseCode: config?.course_code || workspace.courseCode || state.config.courseCode || '', totalQuestions: Number(config?.total_questions) || 0, duration: Number(config?.duration) || 0, start: toDateTimeLocal(config?.start_time), end: toDateTimeLocal(config?.end_time) }; const quizChanged = Boolean(state.currentQuizId && state.currentQuizId !== previousQuizId); const quizRemoved = Boolean(previousQuizId) && (!state.questionsPublished || state.quizStopped || !state.currentQuizId); const quizStateChanged = quizChanged || quizRemoved || state.quizStopped !== previousStopped || state.questionsPublished !== previousPublished || state.questions.length !== previousQuestionCount; if (quizStateChanged) { if (quizRemoved && previousQuizId) { state.results = state.results.filter(result => result.quizId !== previousQuizId); state.studentHistory = state.studentHistory.filter(result => result.quizId !== previousQuizId); state.resultFiles = state.resultFiles.filter(file => !file.id.includes(previousQuizId)); } stopTimer(); session.started = false; session.quizId = state.currentQuizId; session.completed = false; session.result = null; session.selected = null; session.feedback = null; session.index = 0; session.answers = []; session.questionOrder = null; saveStudentSession(); app(); if (state.questionsPublished && quizChanged) showToast('New quiz available. You can start now.'); } }
 function activityList() { if (!state.activity.length) return '<div class="empty">No activity recorded yet. Your workspace will appear here as students participate.</div>'; return `<div class="activity">${state.activity.slice(0, 6).map(item => `<div class="activity-item"><span class="activity-icon">${icon(item.type || 'book')}</span><div>${esc(item.text)}<br><span class="subtle">${formatDate(item.time)}</span></div><span class="activity-time">${new Date(item.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></div>`).join('')}</div>`; }
+async function downloadCorrectionsPdf() {
+  if (!state.questions.length) return showToast('There are no saved questions to download.');
+  try {
+    const { jsPDF } = await import('jspdf');
+    const pdf = new jsPDF({ format: 'a4', unit: 'mm' });
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const margin = 18;
+    const contentWidth = pageWidth - margin * 2;
+    const bottom = pageHeight - margin;
+    let y = margin;
+    const ensureSpace = height => {
+      if (y + height <= bottom) return;
+      pdf.addPage();
+      y = margin;
+    };
+    const addText = (text, options = {}) => {
+      const fontSize = options.fontSize || 10;
+      const lineHeight = options.lineHeight || 5;
+      pdf.setFont('helvetica', options.bold ? 'bold' : 'normal');
+      pdf.setFontSize(fontSize);
+      if (options.color) pdf.setTextColor(...options.color);
+      else pdf.setTextColor(32, 37, 43);
+      const lines = pdf.splitTextToSize(String(text), options.width || contentWidth);
+      lines.forEach(line => {
+        ensureSpace(lineHeight);
+        pdf.text(line, options.x || margin, y);
+        y += lineHeight;
+      });
+      return lines.length;
+    };
+
+    pdf.setProperties({ title: 'Question corrections', subject: 'Saved questions and answer key' });
+    addText('Question corrections', { fontSize: 20, lineHeight: 9, bold: true });
+    const courseHeading = [courseDisplayValue(state.config.courseName), courseDisplayValue(state.config.courseCode)]
+      .filter(Boolean)
+      .join(' · ');
+    if (courseHeading) addText(courseHeading, { fontSize: 11, lineHeight: 6, color: [89, 99, 106] });
+    addText(`${state.questions.length} saved question${state.questions.length === 1 ? '' : 's'} · Answer key`, {
+      fontSize: 10,
+      lineHeight: 7,
+      color: [89, 99, 106]
+    });
+    pdf.setDrawColor(23, 107, 99);
+    pdf.setLineWidth(0.7);
+    pdf.line(margin, y, pageWidth - margin, y);
+    y += 7;
+
+    state.questions.forEach((question, index) => {
+      const isShortAnswer = question.type === 'short-answer';
+      const choices = Array.isArray(question.choices) ? question.choices : [];
+      const correctIndex = Number(question.correct);
+      const correctAnswer = isShortAnswer
+        ? String(question.answer || '').trim()
+        : Number.isInteger(correctIndex) && choices[correctIndex] !== undefined
+          ? `${String.fromCharCode(65 + correctIndex)}. ${choices[correctIndex]}`
+          : '';
+      ensureSpace(14);
+      addText(`${index + 1}. ${question.text}`, { fontSize: 12, lineHeight: 5.5, bold: true });
+      addText(`${Number(question.marks) || 1} mark${Number(question.marks) === 1 ? '' : 's'}`, {
+        fontSize: 9,
+        lineHeight: 5,
+        color: [89, 99, 106]
+      });
+      if (!isShortAnswer) {
+        choices.forEach((choice, choiceIndex) => {
+          addText(`${String.fromCharCode(65 + choiceIndex)}. ${choice}`, {
+            x: margin + 5,
+            width: contentWidth - 5,
+            fontSize: 10,
+            lineHeight: 5
+          });
+        });
+      }
+      if (isShortAnswer) {
+        addText('Expected concepts:', { fontSize: 10, lineHeight: 5, bold: true, color: [23, 107, 99] });
+        addText(correctAnswer || 'No expected concepts are saved.', {
+          x: margin + 4,
+          width: contentWidth - 4,
+          fontSize: 10,
+          lineHeight: 5
+        });
+        addText('Reference answer:', { fontSize: 10, lineHeight: 5, bold: true, color: [23, 107, 99] });
+        addText(String(question.referenceAnswer || '').trim() || 'No reference answer is saved.', {
+          x: margin + 4,
+          width: contentWidth - 4,
+          fontSize: 10,
+          lineHeight: 5
+        });
+      } else {
+        addText('Correct answer:', { fontSize: 10, lineHeight: 5, bold: true, color: [23, 107, 99] });
+        addText(correctAnswer || 'No correct answer is saved.', {
+          x: margin + 4,
+          width: contentWidth - 4,
+          fontSize: 10,
+          lineHeight: 5
+        });
+      }
+      y += 4;
+      pdf.setDrawColor(214, 217, 213);
+      pdf.setLineWidth(0.25);
+      ensureSpace(2);
+      pdf.line(margin, y, pageWidth - margin, y);
+      y += 5;
+    });
+
+    const fileBase = [state.config.courseCode, state.config.courseName, 'question-corrections']
+      .filter(Boolean)
+      .join('-')
+      .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 100) || 'question-corrections';
+    pdf.save(`${fileBase}.pdf`);
+    showToast('Question corrections PDF downloaded.');
+  } catch (error) {
+    showToast(`Question corrections PDF could not be created: ${error.message || error}`, 'error');
+  }
+}
 function questionsView() { const locked = quizIsLocked(); const ended = Boolean(state.questionsPublished && !state.quizStopped && quizHasEnded());
-  return `<section class="grid two-col"><div class="card panel"><div class="panel-head"><div><h2>${editingQuestionId ? 'Edit question' : 'Create a question'}</h2><p class="subtle">Add a reusable multiple-choice question.</p></div><span class="badge">${state.questions.length} saved</span></div><form id="question-form"><input type="hidden" name="id" value="${editingQuestionId || ''}" /><div class="field"><label>Question prompt</label><textarea name="text" placeholder="Write the question students will see..." required>${editingQuestionId ? esc(state.questions.find(question => question.id === editingQuestionId)?.text || '') : ''}</textarea></div><div class="field" style="margin-top:15px"><label>Choices <span id="choice-count">(${editingQuestionId ? state.questions.find(question => question.id === editingQuestionId).choices.length : 4})</span></label><div id="choices">${choiceInputsForEditing()}</div><button type="button" class="btn btn-secondary btn-small" data-action="add-choice">+ Add choice</button></div><div class="form-grid" style="margin-top:15px"><div class="field"><label>Correct answer</label><select id="correct-answer" name="correct">${correctOptionsForEditing()}</select></div><div class="field"><label>Marks</label><input name="marks" type="number" min="1" value="${editingQuestionId ? state.questions.find(question => question.id === editingQuestionId).marks : ''}" placeholder="Enter marks" required /></div></div><div style="display:flex;gap:9px;margin-top:18px"><button class="btn btn-primary">${editingQuestionId ? 'Update question' : 'Save question'}</button>${editingQuestionId ? '<button type="button" class="btn btn-secondary" data-action="cancel-edit">Cancel</button>' : ''}</div></form></div><div class="card panel"><div class="panel-head"><div><h2>Saved questions</h2><p class="subtle">${ended ? 'This quiz ended. You can edit and submit an updated quiz.' : state.questionsPublished && !state.quizStopped ? 'Published questions are available to students.' : 'Questions stay private until you submit them.'}</p></div><div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end"><button class="btn btn-secondary btn-small" data-action="clear-questions" ${state.questions.length ? '' : 'disabled'}>Clear all</button><button class="btn btn-primary btn-small" data-action="publish-questions" ${state.questions.length ? '' : 'disabled'}>${state.questionsPublished && !state.quizStopped && !ended ? 'Questions submitted' : 'Submit questions'}</button></div></div><div id="question-list">${questionList()}</div></div></section>`;
+  return `<section class="grid two-col"><div class="card panel"><div class="panel-head"><div><h2>${editingQuestionId ? 'Edit question' : 'Create a question'}</h2><p class="subtle">Add a reusable multiple-choice question.</p></div><span class="badge">${state.questions.length} saved</span></div><form id="question-form"><input type="hidden" name="id" value="${editingQuestionId || ''}" /><div class="field"><label>Question prompt</label><textarea name="text" placeholder="Write the question students will see..." required>${editingQuestionId ? esc(state.questions.find(question => question.id === editingQuestionId)?.text || '') : ''}</textarea></div><div class="field" style="margin-top:15px"><label>Choices <span id="choice-count">(${editingQuestionId ? state.questions.find(question => question.id === editingQuestionId).choices.length : 4})</span></label><div id="choices">${choiceInputsForEditing()}</div><button type="button" class="btn btn-secondary btn-small" data-action="add-choice">+ Add choice</button></div><div class="form-grid" style="margin-top:15px"><div class="field"><label>Correct answer</label><select id="correct-answer" name="correct">${correctOptionsForEditing()}</select></div><div class="field"><label>Marks</label><input name="marks" type="number" min="1" value="${editingQuestionId ? state.questions.find(question => question.id === editingQuestionId).marks : ''}" placeholder="Enter marks" required /></div></div><div style="display:flex;gap:9px;margin-top:18px"><button class="btn btn-primary">${editingQuestionId ? 'Update question' : 'Save question'}</button>${editingQuestionId ? '<button type="button" class="btn btn-secondary" data-action="cancel-edit">Cancel</button>' : ''}</div></form></div><div class="card panel"><div class="panel-head"><div><h2>Saved questions</h2><p class="subtle">${ended ? 'This quiz ended. You can edit and submit an updated quiz.' : state.questionsPublished && !state.quizStopped ? 'Published questions are available to students.' : 'Questions stay private until you submit them.'}</p></div><div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end"><button class="btn btn-secondary btn-small" data-action="download-corrections" ${state.questions.length ? '' : 'disabled'}>Download corrections (PDF)</button><button class="btn btn-secondary btn-small" data-action="clear-questions" ${state.questions.length ? '' : 'disabled'}>Clear all</button><button class="btn btn-primary btn-small" data-action="publish-questions" ${state.questions.length ? '' : 'disabled'}>${state.questionsPublished && !state.quizStopped && !ended ? 'Questions submitted' : 'Submit questions'}</button></div></div><div id="question-list">${questionList()}</div></div></section>`;
 }
 function choiceInput(index) { return `<div class="choice-row"><input name="choice" data-choice="${index}" placeholder="Choice ${String.fromCharCode(65 + index)}" required /><button type="button" data-action="remove-choice" title="Remove choice">×</button></div>`; }
 function choiceInputsForEditing() { const question = editingQuestionId && state.questions.find(item => item.id === editingQuestionId); return (question ? question.choices : ['', '', '', '']).map((choice, index) => `<div class="choice-row"><input name="choice" data-choice="${index}" value="${esc(choice)}" placeholder="Choice ${String.fromCharCode(65 + index)}" required /><button type="button" data-action="remove-choice" title="Remove choice">×</button></div>`).join(''); }
@@ -492,6 +612,7 @@ function bindEvents() { applyBranding(); const totalQuestionsField = document.qu
   document.querySelectorAll('[data-action="edit-question"]').forEach(button => button.addEventListener('click', () => { editingQuestionId = button.dataset.id; app(); }));
   document.querySelectorAll('[data-action="delete-question"]').forEach(button => button.addEventListener('click', () => deleteQuestion(button.dataset.id)));
   document.querySelectorAll('[data-action="expand-question"]').forEach(button => button.addEventListener('click', () => { const id = button.dataset.id; if (expandedQuestionIds.has(id)) expandedQuestionIds.delete(id); else expandedQuestionIds.add(id); const details = document.querySelector(`#details-${id}`); details.classList.toggle('expanded'); button.textContent = details.classList.contains('expanded') ? 'Collapse' : 'Expand'; }));
+  const downloadCorrectionsButton = document.querySelector('[data-action="download-corrections"]'); if (downloadCorrectionsButton) downloadCorrectionsButton.addEventListener('click', downloadCorrectionsPdf);
   const clearQuestions = document.querySelector('[data-action="clear-questions"]'); if (clearQuestions) clearQuestions.addEventListener('click', clearAllQuestions);
   const publishQuestions = document.querySelector('[data-action="publish-questions"]'); if (publishQuestions) publishQuestions.addEventListener('click', () => { if (teacherMutationInFlight) return; teacherMutationInFlight = true; void publishQuestionsForStudents().finally(() => { teacherMutationInFlight = false; }); });
   const stopQuiz = document.querySelector('[data-action="stop-quiz"]'); if (stopQuiz) stopQuiz.addEventListener('click', stopQuizForEveryone);
@@ -1059,7 +1180,7 @@ questionList = function renderTypedQuestionList() {
           ? `${questionNumber} successfully saved to question bank`
           : '';
     const details = shortAnswer
-      ? `<p class="subtle" style="margin-bottom:0">Expected answer: ${esc(question.answer || '')}</p>`
+      ? `<p class="subtle" style="margin-bottom:0">Expected concepts: ${esc(question.answer || '')}</p>${question.referenceAnswer ? `<p class="subtle" style="margin-bottom:0">Teacher reference answer: ${esc(question.referenceAnswer)}</p>` : ''}`
       : `<p class="subtle" style="margin-bottom:0">${question.choices.length} choices · Correct answer: ${String.fromCharCode(65 + question.correct)}</p>${question.choices.map((choice, choiceIndex) => `<div class="subtle">${String.fromCharCode(65 + choiceIndex)}. ${esc(choice)}</div>`).join('')}`;
     return `<article class="question-item"><div class="question-meta"><span class="badge">${questionNumber}</span><span>${shortAnswer ? 'Short answer' : 'Multiple choice'} · ${question.marks} marks</span></div>${syncStatus ? `<p class="subtle" aria-live="polite">${esc(syncStatus)}</p>` : ''}<h3 style="margin-top:12px">${esc(question.text)}</h3><div class="question-details" id="details-${question.id}">${details}</div><div class="question-actions"><button class="btn btn-secondary btn-small" data-action="expand-question" data-id="${question.id}">Expand</button><button class="btn btn-secondary btn-small" data-action="edit-question" data-id="${question.id}">Edit</button><button class="btn btn-coral btn-small" data-action="delete-question" data-id="${question.id}">Delete</button></div></article>`;
   }).join('');
@@ -1078,7 +1199,7 @@ questionsView = function questionBankWithShortAnswers() {
     markup = markup.replace('<form id="question-form">', '<form id="question-form" hidden>');
   }
   const disabled = quizIsLocked() ? 'disabled' : '';
-  const shortAnswerForm = `<section class="short-answer-section"><div class="short-answer-heading"><h3>${editingShortAnswer ? 'Edit short answer question' : 'Short answer question'}</h3><p class="subtle">Add a reusable question with its expected answer.</p></div><form id="short-answer-form"><input type="hidden" name="shortId" value="${editingShortAnswer ? esc(questionBeingEdited.id) : ''}" /><div class="field"><label>Question prompt</label><textarea name="shortText" placeholder="Write the question students will see..." required ${disabled}>${editingShortAnswer ? esc(questionBeingEdited.text) : ''}</textarea></div><div class="form-grid" style="margin-top:15px"><div class="field"><label>Expected answer</label><input name="expectedAnswer" placeholder="Write the correct answer" value="${editingShortAnswer ? esc(questionBeingEdited.answer || '') : ''}" required ${disabled} /></div><div class="field"><label>Marks</label><input name="shortMarks" type="number" min="1" value="${editingShortAnswer ? Number(questionBeingEdited.marks) || 1 : ''}" placeholder="Enter marks" required ${disabled} /></div></div><div style="display:flex;gap:9px;margin-top:18px"><button class="btn btn-primary" ${disabled}>${editingShortAnswer ? 'Update short answer' : 'Save short answer'}</button>${editingShortAnswer ? '<button type="button" class="btn btn-secondary" data-action="cancel-edit">Cancel</button>' : ''}</div></form></section>`;
+  const shortAnswerForm = `<section class="short-answer-section"><div class="short-answer-heading"><h3>${editingShortAnswer ? 'Edit short answer question' : 'Short answer question'}</h3><p class="subtle">Expected concepts are used for marking; the reference answer is for teacher use only.</p></div><form id="short-answer-form"><input type="hidden" name="shortId" value="${editingShortAnswer ? esc(questionBeingEdited.id) : ''}" /><div class="field"><label>Question prompt</label><textarea name="shortText" placeholder="Write the question students will see..." required ${disabled}>${editingShortAnswer ? esc(questionBeingEdited.text) : ''}</textarea></div><div class="field" style="margin-top:15px"><label>Answer</label><textarea name="referenceAnswer" placeholder="Teacher reference answer (not used for marking or shown to students)" ${disabled}>${editingShortAnswer ? esc(questionBeingEdited.referenceAnswer || '') : ''}</textarea></div><div class="form-grid" style="margin-top:15px"><div class="field"><label>Expected concepts</label><input name="expectedAnswer" placeholder="Concepts and accepted terms used for marking" value="${editingShortAnswer ? esc(questionBeingEdited.answer || '') : ''}" required ${disabled} /><small class="subtle">This is used to mark student responses and is not shown to students.</small></div><div class="field"><label>Marks</label><input name="shortMarks" type="number" min="1" value="${editingShortAnswer ? Number(questionBeingEdited.marks) || 1 : ''}" placeholder="Enter marks" required ${disabled} /></div></div><div style="display:flex;gap:9px;margin-top:18px"><button class="btn btn-primary" ${disabled}>${editingShortAnswer ? 'Update short answer' : 'Save short answer'}</button>${editingShortAnswer ? '<button type="button" class="btn btn-secondary" data-action="cancel-edit">Cancel</button>' : ''}</div></form></section>`;
   return markup.replace('</form></div><div class="card panel">', `</form>${shortAnswerForm}</div><div class="card panel">`);
 };
 
@@ -1093,6 +1214,7 @@ async function confirmShortAnswerQuestionSaved(question) {
   if (savedQuestion?.type !== 'short-answer'
     || savedQuestion.text !== question.text
     || savedQuestion.answer !== question.answer
+    || String(savedQuestion.referenceAnswer || '') !== String(question.referenceAnswer || '')
     || Number(savedQuestion.marks) !== Number(question.marks)) {
     throw new Error('Supabase did not confirm this short-answer question in the question bank.');
   }
@@ -1104,9 +1226,10 @@ function saveShortAnswerQuestion(event) {
   const data = new FormData(event.target);
   const text = String(data.get('shortText') || '').trim();
   const answer = String(data.get('expectedAnswer') || '').trim();
+  const referenceAnswer = String(data.get('referenceAnswer') || '').trim();
   const existing = state.questions.find(item => item.id === data.get('shortId'));
   const id = existing?.id || `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  saveQuestionLocally({ id, type: 'short-answer', text, answer, choices: [], correct: 0, marks: Number(data.get('shortMarks')) || 1 });
+  saveQuestionLocally({ id, type: 'short-answer', text, answer, referenceAnswer, choices: [], correct: 0, marks: Number(data.get('shortMarks')) || 1 });
 }
 
 document.addEventListener('submit', event => {
