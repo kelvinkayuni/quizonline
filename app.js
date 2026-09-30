@@ -235,11 +235,11 @@ function loadState() {
 }
 function filterActivityBeforeClear(activity, clearedAt) { const cutoff = Date.parse(clearedAt || ''); const items = Array.isArray(activity) ? activity : []; return Number.isFinite(cutoff) ? items.filter(item => Number.isFinite(Date.parse(item.time || '')) && Date.parse(item.time || '') > cutoff) : items; }
 function stateForLocalStorage() { if (session?.role !== 'student') return state; return { ...state, results: [], studentHistory: [], resultFiles: [] }; }
-function saveState(options = {}) { localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage())); if (!options.localOnly) persistQuizState(state, session?.role, options); }
+function saveState(options = {}) { localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage())); if (!options.localOnly) persistQuizState(state, session?.role, { ...options, username: session?.username }); }
 function restoreState(snapshot) { state = snapshot; localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
 function saveTeacherDraft(form) { const values = {}; form.querySelectorAll('input, textarea, select').forEach(field => { if (!field.name) return; if (values[field.name] === undefined) values[field.name] = field.value; else values[field.name] = Array.isArray(values[field.name]) ? [...values[field.name], field.value] : [values[field.name], field.value]; }); state.drafts[teacherView] = values; saveState({ localOnly: form.id === 'question-form' || form.id === 'short-answer-form' }); }
 function restoreTeacherDrafts() { const draft = state.drafts[teacherView]; if (!draft) return; document.querySelectorAll('#question-form input, #question-form textarea, #question-form select, #short-answer-form input, #short-answer-form textarea, #short-answer-form select, #config-form input, #config-form select').forEach(field => { const stored = draft[field.name]; if (stored === undefined) return; const index = [...document.querySelectorAll(`[name="${field.name}"]`)].indexOf(field); field.value = Array.isArray(stored) ? (stored[index] || '') : stored; }); }
-function saveStudentSession() { if (session?.role === 'student' && !session.completed) { state.studentSessions[session.username] = { ...session }; saveState(); } }
+function saveStudentSession() { if (session?.role === 'student' && !session.completed) { session.updatedAt = new Date().toISOString(); state.studentSessions[session.username] = { ...session }; saveState(); } }
 function clearStudentSession(username) { delete state.studentSessions[username]; saveState(); }
 function esc(value = '') { return String(value).replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[char])); }
 function formatDate(value) { if (!value) return 'Not scheduled'; return new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }); }
@@ -465,6 +465,18 @@ async function startStudentQuiz() {
   }
   void markStudentOnline(session.username, session.quizId);
   saveStudentSession();
+  try {
+    await persistQuizState(state, 'student', { waitForSync: true, username: session.username });
+  } catch (error) {
+    session.started = false;
+    session.deadlineAt = null;
+    session.remaining = Math.max(60, Number(state.config.duration) * 60);
+    state.studentSessions[session.username] = { ...session };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+    showToast(`The quiz could not start because your progress could not be saved: ${error.message || error}`, 'error');
+    app();
+    return;
+  }
   app();
 }
 function studentAccountWithoutQuiz() { const history = state.studentHistory.filter(item => item.username === session.username); return `<main class="main"><div class="quiz-shell"><div class="quiz-top"><div><div class="brand"><span class="brand-mark">OQ</span><strong>ONLINE QUIZ</strong></div><p class="subtle" style="margin:14px 0 0">${esc(session.username)} · Student account</p></div><div class="student-actions"><button class="btn btn-secondary btn-small" data-action="logout">Sign out</button><button class="btn btn-secondary btn-small" data-action="view-student-history">View quiz history</button><button class="btn btn-secondary btn-small" data-action="download-student-history" ${history.length ? '' : 'disabled'}>Download history</button></div></div><section class="card result-hero"><div class="eyebrow kicker">No active assessment</div><h2>Your student account is ready.</h2><p class="subtle">There is no quiz available right now. You can still review your previous quiz history below.</p>${studentSchedule()}</section><section class="card panel student-history-panel" id="student-history-panel"><div class="panel-head"><div><h2>Quiz history</h2><p class="subtle">Your records can be viewed or downloaded, but not deleted.</p></div></div>${studentHistoryTable(history)}</section></div></main>`; }
@@ -665,8 +677,13 @@ async function handleLogin(event) {
   }
   const savedSession = state.studentSessions[student.username];
   const originalQuestions = state.questions;
-  const questionOrder = savedSession?.questionOrder?.length
+  const savedQuestionOrder = savedSession?.questionOrder?.length
     ? savedSession.questionOrder
+    : Array.isArray(savedSession?.questionOrderIds)
+      ? savedSession.questionOrderIds.map(id => originalQuestions.find(question => question.id === id)).filter(Boolean)
+      : [];
+  const questionOrder = savedQuestionOrder.length
+    ? savedQuestionOrder
     : shuffleQuestions(originalQuestions, username);
   state.questions = questionOrder;
   state.users = state.users.map(user => user.username === student.username
@@ -698,16 +715,22 @@ async function handleLogin(event) {
   saveStudentSession();
   app();
 }
-function logout() {
+async function logout() {
   stopTimer();
   if (session?.role === 'student') {
     saveStudentSession();
     void markStudentOffline(session.username, session.quizId);
+    const username = session.username;
     state.users = state.users.map(user => user.username === session.username
       ? { ...user, status: 'offline', lastSeen: new Date().toISOString() }
       : user);
     if (session.originalQuestions) state.questions = session.originalQuestions;
     saveState();
+    try {
+      await persistQuizState(state, 'student', { waitForSync: true, username });
+    } catch (error) {
+      showToast(`You signed out, but your latest progress may not have synced: ${error.message || error}`, 'error');
+    }
   }
   session = null;
   saveWindowSession();
@@ -1155,11 +1178,15 @@ async function finishQuiz(autoSubmitted) {
   const result = finalizeStudentResult(session, autoSubmitted);
   session.completed = true;
   session.result = result;
+  session.updatedAt = new Date().toISOString();
+  state.studentSessions[session.username] = { ...session };
   state.activity.unshift({ text: `${session.username} ${autoSubmitted ? 'was auto-submitted' : 'completed the quiz'}`, type: 'check', time: new Date().toISOString() });
   state.activity = state.activity.slice(0, 20);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   try {
-    await persistQuizState(state, 'student', { waitForSync: true });
+    await persistQuizState(state, 'student', { waitForSync: true, username: session.username });
+    delete state.studentSessions[session.username];
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
     showToast('Your answers were saved successfully.');
   } catch (error) {
     showToast(`Your result was saved locally, but Supabase synchronization failed: ${error.message || error}`, 'error');

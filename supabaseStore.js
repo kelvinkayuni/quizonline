@@ -283,6 +283,21 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true, 
       Array.isArray(workspace.activity) ? workspace.activity : state.activity,
       state.activityClearedAt
     );
+    const activeStudentSessions = workspace.activeStudentSessions;
+    if (activeStudentSessions && typeof activeStudentSessions === 'object') {
+      for (const savedSession of Object.values(activeStudentSessions)) {
+        if (!savedSession
+          || savedSession.completed
+          || savedSession.quizId !== state.currentQuizId
+          || typeof savedSession.username !== 'string'
+          || !savedSession.username) continue;
+        const existingSession = state.studentSessions[savedSession.username];
+        if (!existingSession
+          || Date.parse(savedSession.updatedAt || '') >= Date.parse(existingSession.updatedAt || '')) {
+          state.studentSessions[savedSession.username] = savedSession;
+        }
+      }
+    }
     state.healthClearedAt = workspace.healthClearedAt || null;
     state.configResetAt = workspace.configResetAt || state.configResetAt || '';
     if (state.configResetAt && state.configResetAt !== previousConfigResetAt) delete state.drafts.config;
@@ -488,11 +503,47 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
             percentage: result.percentage,
             completed_at: result.completedAt
           }, { onConflict: 'username,quiz_id' });
-          if (attemptResult.error) reportError('result synchronization', attemptResult.error);
+          if (attemptResult.error) {
+            reportError('result synchronization', attemptResult.error);
+            if (optionsToPersist.waitForSync) throw attemptResult.error;
+          }
         }
         const workspaceResult = await supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle();
-        if (workspaceResult.error) return reportError('result file loading', workspaceResult.error);
+        if (workspaceResult.error) {
+          reportError('student workspace loading', workspaceResult.error);
+          if (optionsToPersist.waitForSync) throw workspaceResult.error;
+          return;
+        }
         const workspace = workspaceResult.data?.data || {};
+        const activeStudentSessions = { ...(workspace.activeStudentSessions || {}) };
+        const studentSession = optionsToPersist.username
+          ? stateToPersist.studentSessions?.[optionsToPersist.username]
+          : null;
+        if (studentSession?.username && studentSession.quizId) {
+          const sessionKey = `${studentSession.quizId}:${studentSession.username.toLowerCase()}`;
+          if (studentSession.completed) {
+            delete activeStudentSessions[sessionKey];
+          } else {
+            const savedAt = Date.parse(studentSession.updatedAt || '') || 0;
+            const remoteSavedAt = Date.parse(activeStudentSessions[sessionKey]?.updatedAt || '') || 0;
+            if (savedAt >= remoteSavedAt) {
+              activeStudentSessions[sessionKey] = {
+                username: studentSession.username,
+                quizId: studentSession.quizId,
+                questionOrderIds: (studentSession.questionOrder || []).map(question => question.id),
+                index: studentSession.index,
+                selected: studentSession.selected ?? null,
+                response: studentSession.response || '',
+                feedback: studentSession.feedback || null,
+                remaining: studentSession.remaining,
+                deadlineAt: studentSession.deadlineAt || null,
+                started: Boolean(studentSession.started),
+                answers: Array.isArray(studentSession.answers) ? studentSession.answers : [],
+                updatedAt: studentSession.updatedAt || new Date().toISOString()
+              };
+            }
+          }
+        }
         const deletedQuizIds = Array.isArray(workspace.deletedQuizIds) ? workspace.deletedQuizIds : [];
         const existingFiles = Array.isArray(workspace.resultFiles) ? workspace.resultFiles : [];
         const filesById = new Map(existingFiles.map(file => [file.id, file]));
@@ -500,11 +551,24 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
           if (file.id?.startsWith('quiz-') && deletedQuizIds.includes(file.id.slice(5))) continue;
           filesById.set(file.id, { ...file, rows: Array.isArray(file.rows) ? file.rows : [] });
         }
-        const resultFileUpdate = await supabase.from('quiz_workspace').update({
-          data: { ...workspace, resultFiles: [...filesById.values()], studentQuestionOrders: { ...(workspace.studentQuestionOrders || {}), ...(stateToPersist.studentQuestionOrders || {}) } },
+        const resultFileUpdate = await supabase.from('quiz_workspace').upsert({
+          id: 1,
+          data: { ...workspace, activeStudentSessions, resultFiles: [...filesById.values()], studentQuestionOrders: { ...(workspace.studentQuestionOrders || {}), ...(stateToPersist.studentQuestionOrders || {}) } },
           updated_at: new Date().toISOString()
-        }).eq('id', 1);
-        if (resultFileUpdate.error) reportError('result file synchronization', resultFileUpdate.error);
+        }).select('data').single();
+        if (resultFileUpdate.error) {
+          reportError('student workspace synchronization', resultFileUpdate.error);
+          if (optionsToPersist.waitForSync) throw resultFileUpdate.error;
+        } else if (studentSession?.username && studentSession.quizId) {
+          const sessionKey = `${studentSession.quizId}:${studentSession.username.toLowerCase()}`;
+          const persistedSession = resultFileUpdate.data?.data?.activeStudentSessions?.[sessionKey];
+          if (studentSession.completed ? persistedSession : !persistedSession
+            || persistedSession.updatedAt !== studentSession.updatedAt) {
+            const error = new Error('Supabase did not confirm the latest saved quiz progress.');
+            reportError('student attempt verification', error);
+            if (optionsToPersist.waitForSync) throw error;
+          }
+        }
         return;
       }
     if (optionsToPersist.workspaceOnly) {

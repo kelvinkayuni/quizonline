@@ -25,7 +25,7 @@ An internet connection is needed for Supabase, Google Fonts, and the SheetJS CDN
 - Teacher-only question-corrections PDF downloads with answer keys from the saved question bank.
 - Short-answer questions keep expected concepts for marking separate from an optional teacher reference answer.
 - Student quiz flow with one question at a time, submit-gated feedback, timer, automatic submission, and no retakes after completion.
-- Questions, quiz configuration, and completed attempts synchronize with Supabase. Draft forms, active timers, imported workbook credentials, and browser login sessions remain local until they are moved to authenticated server-side tables.
+- Questions, quiz configuration, and completed attempts synchronize with Supabase. Active student quiz progress is also saved in the shared workspace so it can resume on another device; browser login sessions and imported workbook credentials remain browser-local.
 - `.xlsx` student import and results download through SheetJS.
 
 Supabase tables and Row Level Security policies must exist before synchronization can succeed. The browser uses only `SUPABASE_URL` and `SUPABASE_ANON_KEY`; never expose `SUPABASE_SERVICE_ROLE_KEY` in frontend code.
