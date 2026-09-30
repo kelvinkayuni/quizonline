@@ -834,18 +834,27 @@ async function logout() {
   stopTimer();
   if (session?.role === 'student') {
     saveStudentSession({ localOnly: true });
-    void markStudentOffline(session.username, session.quizId);
     const studentSession = session;
-    state.users = state.users.map(user => user.username === session.username
-      ? { ...user, status: 'offline', lastSeen: new Date().toISOString() }
-      : user);
     if (session.originalQuestions) state.questions = session.originalQuestions;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
     try {
       await flushStudentAttemptSave(studentSession);
     } catch (error) {
-      showToast(`You signed out, but your latest progress may not have synced: ${error.message || error}`, 'error');
+      if (error.code === 'claimed') {
+        session = null;
+        saveWindowSession();
+        showToast(`This device was signed out because the attempt is active on another device. Its latest local progress was not uploaded.`, 'error');
+        app();
+        return;
+      }
+      showToast(`Sign-out cancelled so this quiz stays open until progress is saved: ${error.message || error}`, 'error');
+      app();
+      return;
     }
+    void markStudentOffline(studentSession.username, studentSession.quizId);
+    state.users = state.users.map(user => user.username === studentSession.username
+      ? { ...user, status: 'offline', lastSeen: new Date().toISOString() }
+      : user);
   }
   session = null;
   saveWindowSession();
@@ -1301,6 +1310,7 @@ async function finishQuiz(autoSubmitted) {
     state.studentSessions[session.username] = { ...session };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
     showToast(`The quiz was not submitted because the latest progress could not be confirmed in Supabase: ${error.message || error}`, 'error');
+    app();
     return;
   }
   const result = finalizeStudentResult(session, autoSubmitted);

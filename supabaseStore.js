@@ -59,26 +59,72 @@ export async function claimStudentAttempt(quizId, username, password, initialSes
 }
 
 export async function persistStudentAttempt(studentSession) {
-  const { data, error } = await withTimeout(
-    supabase.rpc('save_quiz_active_attempt', {
-      p_quiz_id: String(studentSession.quizId),
-      p_username: studentSession.username,
-      p_generation: Number(studentSession.attemptGeneration),
-      p_owner_token: studentSession.attemptOwnerToken,
-      p_expected_revision: Number(studentSession.attemptRevision),
-      p_attempt_data: attemptDataFromSession(studentSession)
-    }),
-    'Student attempt save'
-  );
-  if (error) throw error;
-  if (!data?.saved) {
-    const saveError = new Error(data?.reason === 'claimed'
-      ? 'This attempt was opened on another device. Sign in again here to load the latest saved progress.'
-      : 'Supabase rejected this progress update because a newer version is already saved.');
-    saveError.code = data?.reason || 'attempt_conflict';
-    throw saveError;
+  const attemptData = attemptDataFromSession(studentSession);
+  const saveId = crypto.randomUUID();
+  let expectedRevision = Number(studentSession.attemptRevision);
+  let networkRetryUsed = false;
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let data;
+    try {
+      const result = await withTimeout(
+        supabase.rpc('save_quiz_active_attempt', {
+          p_quiz_id: String(studentSession.quizId),
+          p_username: studentSession.username,
+          p_generation: Number(studentSession.attemptGeneration),
+          p_owner_token: studentSession.attemptOwnerToken,
+          p_expected_revision: expectedRevision,
+          p_save_id: saveId,
+          p_attempt_data: attemptData
+        }),
+        'Student attempt save'
+      );
+      if (result.error) throw result.error;
+      data = result.data;
+    } catch (error) {
+      if (networkRetryUsed) throw error;
+      networkRetryUsed = true;
+      attempt--;
+      continue;
+    }
+
+    if (data?.saved) return Number(data.revision);
+    if (data?.reason === 'claimed') {
+      const saveError = new Error('This attempt was opened on another device. Sign in again here to load the latest saved progress.');
+      saveError.code = 'claimed';
+      throw saveError;
+    }
+    if (data?.reason !== 'revision' || !isSafeAttemptExtension(attemptData, data.attempt_data)) {
+      const saveError = new Error('A newer progress version exists and cannot safely be merged. Keep this page open and sign in again to load the latest saved progress.');
+      saveError.code = data?.reason || 'attempt_conflict';
+      throw saveError;
+    }
+    expectedRevision = Number(data.revision);
   }
-  return Number(data.revision);
+  const saveError = new Error('Quiz progress changed repeatedly while saving. Keep this page open and retry.');
+  saveError.code = 'attempt_conflict';
+  throw saveError;
+}
+
+function isSafeAttemptExtension(localAttempt, remoteAttempt) {
+  if (!remoteAttempt
+    || JSON.stringify(localAttempt.questionOrderIds) !== JSON.stringify(remoteAttempt.questionOrderIds)
+    || localAttempt.deadlineAt !== remoteAttempt.deadlineAt
+    || Number(localAttempt.index) < Number(remoteAttempt.index)) return false;
+
+  const localAnswers = Array.isArray(localAttempt.answers) ? localAttempt.answers : [];
+  const remoteAnswers = Array.isArray(remoteAttempt.answers) ? remoteAttempt.answers : [];
+  if (remoteAnswers.length > localAnswers.length
+    || JSON.stringify(localAnswers.slice(0, remoteAnswers.length)) !== JSON.stringify(remoteAnswers)
+    || Number(localAttempt.index) - Number(remoteAttempt.index) > localAnswers.length - remoteAnswers.length) return false;
+
+  if (Number(localAttempt.index) === Number(remoteAttempt.index)) {
+    if (remoteAttempt.selected != null && localAttempt.selected !== remoteAttempt.selected) return false;
+    if (remoteAttempt.response && !String(localAttempt.response || '').startsWith(remoteAttempt.response)) return false;
+    if (remoteAttempt.feedback
+      && JSON.stringify(localAttempt.feedback) !== JSON.stringify(remoteAttempt.feedback)) return false;
+  }
+  return true;
 }
 
 export async function deleteStudentAttempt(studentSession) {

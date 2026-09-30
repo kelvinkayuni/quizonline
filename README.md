@@ -80,7 +80,7 @@ using (true)
 with check (true);
 ```
 
-For cross-device resume of in-progress quizzes, run [`supabase-active-attempts.sql`](supabase-active-attempts.sql) in the Supabase SQL Editor after creating `quiz_workspace` and before deploying the app. The app claims an attempt on student sign-in and saves versioned progress through database functions; a newer sign-in invalidates writes from the previous device. Attempt rows are not directly readable by browser clients, and the claim function checks the supplied student credentials against the shared workspace.
+For cross-device resume of in-progress quizzes, run [`supabase-active-attempts.sql`](supabase-active-attempts.sql) in the Supabase SQL Editor after creating `quiz_workspace` and before deploying the app. If the earlier version of this script was already run, run the updated script again before deploying. The app claims an attempt on student sign-in and saves versioned progress through database functions; a newer sign-in invalidates writes from the previous device. Save IDs make retries idempotent, and revision conflicts return the current server copy so the client only retries when its progress safely extends that copy. Attempt rows are not directly readable by browser clients, and the claim function checks the supplied student credentials against the shared workspace.
 
 Add course metadata to the quiz configuration table:
 
