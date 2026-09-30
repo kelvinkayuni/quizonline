@@ -1,7 +1,7 @@
 function courseDisplayValue(value) { const normalized = String(value || '').trim(); return normalized === '34' || normalized.toLowerCase() === 'course' ? '' : normalized; }
 function studentCourseDetails() { const courseName = courseDisplayValue(state.config.courseName); const courseCode = courseDisplayValue(state.config.courseCode); return courseName || courseCode ? `<div class="course-banner">${courseName ? `<strong>${esc(courseName)}</strong>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''; }
 import { supabase } from './supabase.js';
-import { deleteQuizAttempts, hydrateQuizState, persistQuestionToSupabase, persistQuizState } from './supabaseStore.js';
+import { deleteQuizAttempts, hydrateQuizState, persistActivityClear, persistQuestionToSupabase, persistQuizState } from './supabaseStore.js';
 import { loadLiveStudentUsernames, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { shortAnswerMatchScore } from './shortAnswerMatching.js';
 
@@ -176,7 +176,8 @@ const defaultState = {
   studentLoginActive: false,
   configSaved: false,
   config: { courseName: '', courseCode: '', totalQuestions: 0, duration: 0, start: '', end: '' },
-  activity: []
+  activity: [],
+  activityClearedAt: null
 };
 let session = null;
 let state = loadState();
@@ -224,9 +225,11 @@ function loadState() {
     const saved = { ...defaultState, ...JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}') };
     if (saved.config?.courseName === 'Course') saved.config.courseName = '';
     if (saved.config?.courseCode === '34') saved.config.courseCode = '';
+    saved.activity = filterActivityBeforeClear(saved.activity, saved.activityClearedAt);
     return saved;
   } catch { return structuredClone(defaultState); }
 }
+function filterActivityBeforeClear(activity, clearedAt) { const cutoff = Date.parse(clearedAt || ''); const items = Array.isArray(activity) ? activity : []; return Number.isFinite(cutoff) ? items.filter(item => Number.isFinite(Date.parse(item.time || '')) && Date.parse(item.time || '') > cutoff) : items; }
 function stateForLocalStorage() { if (session?.role !== 'student') return state; return { ...state, results: [], studentHistory: [], resultFiles: [] }; }
 function saveState(options = {}) { localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage())); if (!options.localOnly) persistQuizState(state, session?.role, options); }
 function restoreState(snapshot) { state = snapshot; localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
@@ -795,7 +798,35 @@ async function clearResultFileHistory() {
   }
 }
 function clearAssessmentHealth() { if (!healthResults().length) return; state.healthClearedAt = new Date().toISOString(); saveState(); addActivity('Assessment health metrics were cleared', 'results'); showToast('Assessment health cleared. Result files are still available.'); app(); }
-function clearRecentActivity() { if (!state.activity.length) return; state.activity = []; saveState(); showToast('Recent activity cleared.'); app(); }
+let activityClearInFlight = false;
+async function clearRecentActivity() {
+  if (!state.activity.length || activityClearInFlight) return;
+  const previousActivity = state.activity;
+  const previousClearedAt = state.activityClearedAt;
+  const clearedAt = new Date().toISOString();
+  state.activityClearedAt = clearedAt;
+  state.activity = filterActivityBeforeClear(state.activity, clearedAt);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+  app();
+  activityClearInFlight = true;
+  try {
+    state.activityClearedAt = await persistActivityClear(state, clearedAt);
+    state.activity = filterActivityBeforeClear(state.activity, state.activityClearedAt);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+    showToast('Recent activity cleared.');
+  } catch (error) {
+    state.activityClearedAt = previousClearedAt;
+    state.activity = [...state.activity, ...previousActivity]
+      .filter((item, index, items) => items.findIndex(candidate => candidate.text === item.text && candidate.time === item.time) === index)
+      .sort((left, right) => Date.parse(right.time || '') - Date.parse(left.time || ''))
+      .slice(0, 20);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+    showToast(`Recent activity could not be cleared: ${error.message || error}`, 'error');
+  } finally {
+    activityClearInFlight = false;
+    app();
+  }
+}
 function downloadResults() { if (!window.XLSX) return; const file = state.resultFiles.find(item => item.id === selectedResultFileId) || state.resultFiles[0]; const results = file?.rows || state.results; if (!results.length) return; const rows = [['Student username', 'Number of questions attempted', 'Number answered incorrectly', 'Total marks obtained', 'Percentage score'], ...results.map(result => [result.username, result.attempted, result.incorrect, result.score, `${result.percentage}%`])]; const sheet = XLSX.utils.aoa_to_sheet(rows); const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, 'Results'); XLSX.writeFile(book, `${file?.name || 'online-quiz-results'}.xlsx`); showToast('Results workbook downloaded.'); }
 function downloadStudentHistory() { if (!window.XLSX || !session) return; const history = state.studentHistory.filter(item => item.username === session.username); if (!history.length) return; const rows = [['Date', 'Duration (minutes)', 'Questions attempted', 'Questions right', 'Questions wrong', 'Marks scored', 'Total marks'], ...history.map(item => [formatDate(item.completedAt), item.durationMinutes, item.attempted, item.correct, item.incorrect, item.score, item.totalMarks])]; const sheet = XLSX.utils.aoa_to_sheet(rows); const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, 'Quiz history'); XLSX.writeFile(book, `${session.username}-quiz-history.xlsx`); showToast('Your quiz history was downloaded.'); }
 function startTimer() { stopTimer(); timerId = setInterval(() => { if (!session || session.role !== 'student' || session.completed) return stopTimer(); if (state.quizStopped) { showToast('The quiz was stopped. Your current attempt is being submitted.'); void finishQuiz(true); return; } if (session.quizId !== state.currentQuizId) { stopTimer(); app(); return; } if (quizHasEnded()) { showToast('The deadline is reached. Your quiz is being submitted.'); void finishQuiz(true); return; } session.remaining -= 1; saveStudentSession(); const timer = document.querySelector('#timer'); if (timer) timer.textContent = formatTime(session.remaining); if (session.remaining <= 0) { showToast('Time is up. Your quiz is being submitted.'); void finishQuiz(true); } }, 1000); }

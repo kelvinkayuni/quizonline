@@ -8,6 +8,8 @@ let syncTimer = null;
 let syncResolvers = [];
 const questionIdAliases = new Map();
 const SUPABASE_REQUEST_TIMEOUT = 30000;
+const QUIZ_ATTEMPT_DELETE_BATCH_SIZE = 100;
+const deletedQuizAttemptIds = new Set();
 
 function withTimeout(request, operation) {
   let timeoutId;
@@ -43,6 +45,20 @@ function toSupabaseTimestamp(value) {
 
 function cleanCourseValue(value, legacyValue) {
   return String(value || '').trim() === legacyValue ? '' : String(value || '');
+}
+
+function latestActivityClearMarker(...markers) {
+  return markers
+    .filter(marker => marker && Number.isFinite(Date.parse(marker)))
+    .sort((left, right) => Date.parse(right) - Date.parse(left))[0] || null;
+}
+
+function filterActivityBeforeClear(activity, clearedAt) {
+  const cutoff = Date.parse(clearedAt || '');
+  const items = Array.isArray(activity) ? activity : [];
+  return Number.isFinite(cutoff)
+    ? items.filter(item => Number.isFinite(Date.parse(item.time || '')) && Date.parse(item.time || '') > cutoff)
+    : items;
 }
 
 function normalizeQuestion(row) {
@@ -239,7 +255,11 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true, 
       : Boolean(workspace.configSaved);
     state.deletedQuizIds = Array.isArray(workspace.deletedQuizIds) ? workspace.deletedQuizIds : state.deletedQuizIds;
     state.resultFiles = Array.isArray(workspace.resultFiles) ? cleanedResultFiles : state.resultFiles;
-    state.activity = Array.isArray(workspace.activity) ? workspace.activity : state.activity;
+    state.activityClearedAt = latestActivityClearMarker(state.activityClearedAt, workspace.activityClearedAt);
+    state.activity = filterActivityBeforeClear(
+      Array.isArray(workspace.activity) ? workspace.activity : state.activity,
+      state.activityClearedAt
+    );
     state.healthClearedAt = workspace.healthClearedAt || null;
     state.configResetAt = workspace.configResetAt || state.configResetAt || '';
     if (state.configResetAt && state.configResetAt !== previousConfigResetAt) delete state.drafts.config;
@@ -364,6 +384,44 @@ export function persistQuestionToSupabase(state, localId) {
   return operation;
 }
 
+export function persistActivityClear(state, clearedAt) {
+  const operation = syncQueue.then(async () => {
+    const workspaceResult = await withTimeout(
+      supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle(),
+      'Activity clear workspace loading'
+    );
+    if (workspaceResult.error) throw workspaceResult.error;
+
+    const workspace = workspaceResult.data?.data || {};
+    const activityClearedAt = latestActivityClearMarker(
+      clearedAt,
+      state.activityClearedAt,
+      workspace.activityClearedAt
+    );
+    const activity = filterActivityBeforeClear(state.activity, activityClearedAt);
+    const savedResult = await withTimeout(
+      supabase.from('quiz_workspace').upsert({
+        id: 1,
+        data: { ...workspace, activity, activityClearedAt },
+        updated_at: new Date().toISOString()
+      }).select('data').single(),
+      'Activity clear synchronization'
+    );
+    if (savedResult.error) throw savedResult.error;
+    if (savedResult.data?.data?.activityClearedAt !== activityClearedAt
+      || !Array.isArray(savedResult.data?.data?.activity)
+      || savedResult.data.data.activity.some(item => {
+        const itemTime = Date.parse(item.time || '');
+        return !Number.isFinite(itemTime) || itemTime <= Date.parse(activityClearedAt);
+      })) {
+      throw new Error('Supabase did not confirm the cleared activity state.');
+    }
+    return activityClearedAt;
+  });
+  syncQueue = operation.catch(() => {});
+  return operation;
+}
+
 export function persistQuizState(state, role = 'teacher', options = {}) {
   pendingState = state;
   pendingOptions = { ...options };
@@ -448,11 +506,16 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
       }
       return;
     }
-    for (const quizId of stateToPersist.deletedQuizIds || []) {
-      const deletedAttempts = await supabase.from('quiz_attempts').delete().eq('quiz_id', quizId);
+    const pendingQuizAttemptDeletes = [...new Set(stateToPersist.deletedQuizIds || [])]
+      .filter(quizId => quizId && !deletedQuizAttemptIds.has(quizId));
+    for (let offset = 0; offset < pendingQuizAttemptDeletes.length; offset += QUIZ_ATTEMPT_DELETE_BATCH_SIZE) {
+      const quizIds = pendingQuizAttemptDeletes.slice(offset, offset + QUIZ_ATTEMPT_DELETE_BATCH_SIZE);
+      const deletedAttempts = await supabase.from('quiz_attempts').delete().in('quiz_id', quizIds);
       if (deletedAttempts.error) {
         reportError('quiz record deletion', deletedAttempts.error);
         if (optionsToPersist.waitForSync) throw deletedAttempts.error;
+      } else {
+        quizIds.forEach(quizId => deletedQuizAttemptIds.add(quizId));
       }
     }
     const existingQuestions = await supabase.from('questions').select('id');
@@ -615,4 +678,5 @@ export async function deleteQuizAttempts(quizIds) {
   );
   if (verifyResult.error) throw verifyResult.error;
   if (verifyResult.data?.length) throw new Error('Supabase still contains result records for the cleared quizzes.');
+  ids.forEach(quizId => deletedQuizAttemptIds.add(quizId));
 }
