@@ -45,6 +45,9 @@ export async function claimStudentAttempt(quizId, username, password, initialSes
     'Student attempt loading'
   );
   if (error) throw error;
+  if (data?.completed && data.result) {
+    return { completed: true, result: normalizeAttempt(data.result) };
+  }
   if (!data || typeof data !== 'object' || typeof data.owner_token !== 'string'
     || !Number.isFinite(Number(data.generation))
     || !Number.isFinite(Number(data.revision))) {
@@ -250,35 +253,48 @@ export async function loadStudentQuizResult(username, quizId) {
   return data ? normalizeAttempt(data) : null;
 }
 
-export async function persistStudentQuizResult(result) {
-  if (!result?.username || !result.quizId) {
-    throw new Error('The completed result is missing its student username or quiz ID.');
+export async function persistStudentQuizResult(result, studentSession) {
+  if (!result?.username || !result.quizId
+    || result.username !== studentSession?.username
+    || result.quizId !== studentSession?.quizId
+    || studentSession?.attemptGeneration == null
+    || !studentSession.attemptOwnerToken) {
+    throw new Error("The completed result does not match this device's claimed student attempt.");
   }
   const { data, error } = await withTimeout(
-    supabase.from('quiz_attempts').upsert({
-      username: result.username,
-      quiz_id: result.quizId,
-      answers: result.answers || [],
-      score: result.score,
-      total_marks: result.totalMarks,
-      percentage: result.percentage,
-      completed_at: result.completedAt
-    }, { onConflict: 'username,quiz_id' })
-      .select('*')
-      .single(),
+    supabase.rpc('complete_quiz_active_attempt', {
+      p_quiz_id: String(result.quizId),
+      p_username: result.username,
+      p_generation: Number(studentSession.attemptGeneration),
+      p_owner_token: studentSession.attemptOwnerToken,
+      p_result: {
+        username: result.username,
+        quizId: result.quizId,
+        answers: result.answers || [],
+        score: result.score,
+        totalMarks: result.totalMarks,
+        percentage: result.percentage,
+        completedAt: result.completedAt
+      }
+    }),
     'Completed quiz result save'
   );
   if (error) throw error;
-  if (!data
-    || data.username !== result.username
-    || data.quiz_id !== result.quizId
-    || Date.parse(data.completed_at || '') !== Date.parse(result.completedAt || '')
-    || Number(data.score) !== Number(result.score)
-    || Number(data.total_marks) !== Number(result.totalMarks)
-    || Number(data.percentage) !== Number(result.percentage)) {
-    throw new Error('Supabase did not confirm the completed result for this student and quiz.');
+  if (data?.reason === 'claimed') {
+    const saveError = new Error('This attempt is active on another device. Its owner must finish and save the result.');
+    saveError.code = 'claimed';
+    throw saveError;
   }
-  return normalizeAttempt(data);
+  if (!data?.saved || !data.result) {
+    throw new Error(data?.reason === 'missing'
+      ? 'Supabase no longer has this active attempt, and no completed result exists.'
+      : 'Supabase did not confirm the completed result for this student and quiz.');
+  }
+  return normalizeAttempt({
+    ...data.result,
+    total_marks: data.result.total_marks ?? data.result.totalMarks,
+    completed_at: data.result.completed_at ?? data.result.completedAt
+  });
 }
 
 function sameQuestionRow(left, right) {
@@ -864,6 +880,7 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
     }
 
     for (const result of state.results) {
+      if (!result.quizId) continue;
       const attemptResult = await supabase.from('quiz_attempts').upsert({
         username: result.username,
         quiz_id: result.quizId || state.currentQuizId,
@@ -872,7 +889,7 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
         total_marks: result.totalMarks,
         percentage: result.percentage,
         completed_at: result.completedAt
-      }, { onConflict: 'username,quiz_id' });
+      }, { onConflict: 'username,quiz_id', ignoreDuplicates: true });
       if (attemptResult.error) reportError('result synchronization', attemptResult.error);
     }
     }).catch(error => {

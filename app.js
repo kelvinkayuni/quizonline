@@ -1,7 +1,7 @@
 function courseDisplayValue(value) { const normalized = String(value || '').trim(); return normalized === '34' || normalized.toLowerCase() === 'course' ? '' : normalized; }
 function studentCourseDetails() { const courseName = courseDisplayValue(state.config.courseName); const courseCode = courseDisplayValue(state.config.courseCode); return courseName || courseCode ? `<div class="course-banner">${courseName ? `<strong>${esc(courseName)}</strong>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''; }
 import { supabase } from './supabase.js';
-import { claimStudentAttempt, deleteQuizAttempts, deleteStudentAttempt, hydrateQuizState, loadStudentQuizResult, persistActivityClear, persistQuestionToSupabase, persistQuizState, persistStudentAttempt, persistStudentQuizResult, reconcileStudentAttempt } from './supabaseStore.js';
+import { claimStudentAttempt, deleteQuizAttempts, hydrateQuizState, loadStudentQuizResult, persistActivityClear, persistQuestionToSupabase, persistQuizState, persistStudentAttempt, persistStudentQuizResult, reconcileStudentAttempt } from './supabaseStore.js';
 import { loadLiveStudentUsernames, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { shortAnswerMatchScore } from './shortAnswerMatching.js';
 
@@ -816,6 +816,14 @@ async function handleLogin(event) {
   if (state.questionsPublished && state.currentQuizId) {
     try {
       const claimedAttempt = await claimStudentAttempt(state.currentQuizId, student.username, password, initialSession);
+      if (claimedAttempt.completed) {
+        const completedResult = claimedAttempt.result;
+        state.results = [...state.results.filter(result => !(result.username === student.username && result.quizId === completedResult.quizId)), completedResult];
+        state.studentHistory = [...state.studentHistory.filter(result => !(result.username === student.username && result.quizId === completedResult.quizId)), completedResult];
+        session = { role: 'student', username: student.username, quizId: state.currentQuizId, completed: true, result: completedResult };
+        app();
+        return;
+      }
       const remoteAttempt = claimedAttempt.data || {};
       const reconciliation = reconcileStudentAttempt(initialSession, remoteAttempt);
       const restoredAttempt = reconciliation.attempt || {};
@@ -1406,7 +1414,7 @@ async function finishQuiz(autoSubmitted) {
       }
     }
   }
-  const result = retryingResultSave
+  let result = retryingResultSave
     ? session.result
     : finalizeStudentResult(session, autoSubmitted);
   if (!result) {
@@ -1430,8 +1438,12 @@ async function finishQuiz(autoSubmitted) {
     ? 'the latest progress returned by Supabase'
     : "this device's saved progress";
   try {
-    await persistStudentQuizResult(result);
+    result = await persistStudentQuizResult(result, session);
   } catch (error) {
+    if (error.code === 'claimed') {
+      relinquishClaimedStudentAttempt(session);
+      return;
+    }
     session.resultSyncError = error.message || String(error);
     state.studentSessions[session.username] = { ...session };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
@@ -1439,6 +1451,13 @@ async function finishQuiz(autoSubmitted) {
     app();
     return;
   }
+  state.results = [...state.results.filter(item => !(item.username === result.username && item.quizId === result.quizId)), result];
+  state.studentHistory = [...state.studentHistory.filter(item => !(item.username === result.username && item.quizId === result.quizId)), result];
+  const resultFile = state.resultFiles.find(file => file.id === `quiz-${result.quizId}`);
+  if (resultFile) {
+    resultFile.rows = [...resultFile.rows.filter(item => item.username !== result.username), result];
+  }
+  session.result = result;
   session.resultSyncPending = false;
   session.resultSyncError = '';
   state.studentSessions[session.username] = { ...session };
@@ -1450,13 +1469,8 @@ async function finishQuiz(autoSubmitted) {
   } catch (error) {
     synchronizationError = error;
   }
-  try {
-    await deleteStudentAttempt(session);
-    delete state.studentSessions[session.username];
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
-  } catch (error) {
-    synchronizationError = synchronizationError || error;
-  }
+  delete state.studentSessions[session.username];
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
   if (synchronizationError) {
     showToast(`Your result is confirmed in Supabase, but result-file synchronization or active-attempt cleanup failed: ${synchronizationError.message || synchronizationError}`, 'error');
   } else {
