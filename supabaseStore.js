@@ -19,6 +19,84 @@ function withTimeout(request, operation) {
   return Promise.race([request, timeout]).finally(() => clearTimeout(timeoutId));
 }
 
+function attemptDataFromSession(studentSession) {
+  return {
+    questionOrderIds: (studentSession.questionOrder || []).map(question => question.id),
+    index: Number(studentSession.index) || 0,
+    selected: studentSession.selected ?? null,
+    response: studentSession.response || '',
+    feedback: studentSession.feedback || null,
+    remaining: Number(studentSession.remaining) || 0,
+    deadlineAt: studentSession.deadlineAt || null,
+    started: Boolean(studentSession.started),
+    answers: Array.isArray(studentSession.answers) ? studentSession.answers : [],
+    updatedAt: studentSession.updatedAt || new Date().toISOString()
+  };
+}
+
+export async function claimStudentAttempt(quizId, username, password, initialSession) {
+  const { data, error } = await withTimeout(
+    supabase.rpc('claim_quiz_active_attempt', {
+      p_quiz_id: String(quizId),
+      p_username: username,
+      p_password: password,
+      p_initial_data: initialSession ? attemptDataFromSession(initialSession) : null
+    }),
+    'Student attempt loading'
+  );
+  if (error) throw error;
+  if (!data || typeof data !== 'object' || typeof data.owner_token !== 'string'
+    || !Number.isFinite(Number(data.generation))
+    || !Number.isFinite(Number(data.revision))) {
+    throw new Error('Supabase returned an invalid active-attempt record.');
+  }
+  return {
+    generation: Number(data.generation),
+    revision: Number(data.revision),
+    ownerToken: data.owner_token,
+    data: data.attempt_data || null
+  };
+}
+
+export async function persistStudentAttempt(studentSession) {
+  const { data, error } = await withTimeout(
+    supabase.rpc('save_quiz_active_attempt', {
+      p_quiz_id: String(studentSession.quizId),
+      p_username: studentSession.username,
+      p_generation: Number(studentSession.attemptGeneration),
+      p_owner_token: studentSession.attemptOwnerToken,
+      p_expected_revision: Number(studentSession.attemptRevision),
+      p_attempt_data: attemptDataFromSession(studentSession)
+    }),
+    'Student attempt save'
+  );
+  if (error) throw error;
+  if (!data?.saved) {
+    const saveError = new Error(data?.reason === 'claimed'
+      ? 'This attempt was opened on another device. Sign in again here to load the latest saved progress.'
+      : 'Supabase rejected this progress update because a newer version is already saved.');
+    saveError.code = data?.reason || 'attempt_conflict';
+    throw saveError;
+  }
+  return Number(data.revision);
+}
+
+export async function deleteStudentAttempt(studentSession) {
+  const { data, error } = await withTimeout(
+    supabase.rpc('delete_quiz_active_attempt', {
+      p_quiz_id: String(studentSession.quizId),
+      p_username: studentSession.username,
+      p_generation: Number(studentSession.attemptGeneration),
+      p_owner_token: studentSession.attemptOwnerToken
+    }),
+    'Completed student attempt cleanup'
+  );
+  if (error) throw error;
+  if (!data?.deleted && !data?.missing) {
+    throw new Error('A newer device has taken over this attempt, so its saved progress was kept.');
+  }
+}
+
 function isUuid(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value || '');
 }
@@ -283,21 +361,6 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true, 
       Array.isArray(workspace.activity) ? workspace.activity : state.activity,
       state.activityClearedAt
     );
-    const activeStudentSessions = workspace.activeStudentSessions;
-    if (activeStudentSessions && typeof activeStudentSessions === 'object') {
-      for (const savedSession of Object.values(activeStudentSessions)) {
-        if (!savedSession
-          || savedSession.completed
-          || savedSession.quizId !== state.currentQuizId
-          || typeof savedSession.username !== 'string'
-          || !savedSession.username) continue;
-        const existingSession = state.studentSessions[savedSession.username];
-        if (!existingSession
-          || Date.parse(savedSession.updatedAt || '') >= Date.parse(existingSession.updatedAt || '')) {
-          state.studentSessions[savedSession.username] = savedSession;
-        }
-      }
-    }
     state.healthClearedAt = workspace.healthClearedAt || null;
     state.configResetAt = workspace.configResetAt || state.configResetAt || '';
     if (state.configResetAt && state.configResetAt !== previousConfigResetAt) delete state.drafts.config;
@@ -515,35 +578,6 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
           return;
         }
         const workspace = workspaceResult.data?.data || {};
-        const activeStudentSessions = { ...(workspace.activeStudentSessions || {}) };
-        const studentSession = optionsToPersist.username
-          ? stateToPersist.studentSessions?.[optionsToPersist.username]
-          : null;
-        if (studentSession?.username && studentSession.quizId) {
-          const sessionKey = `${studentSession.quizId}:${studentSession.username.toLowerCase()}`;
-          if (studentSession.completed) {
-            delete activeStudentSessions[sessionKey];
-          } else {
-            const savedAt = Date.parse(studentSession.updatedAt || '') || 0;
-            const remoteSavedAt = Date.parse(activeStudentSessions[sessionKey]?.updatedAt || '') || 0;
-            if (savedAt >= remoteSavedAt) {
-              activeStudentSessions[sessionKey] = {
-                username: studentSession.username,
-                quizId: studentSession.quizId,
-                questionOrderIds: (studentSession.questionOrder || []).map(question => question.id),
-                index: studentSession.index,
-                selected: studentSession.selected ?? null,
-                response: studentSession.response || '',
-                feedback: studentSession.feedback || null,
-                remaining: studentSession.remaining,
-                deadlineAt: studentSession.deadlineAt || null,
-                started: Boolean(studentSession.started),
-                answers: Array.isArray(studentSession.answers) ? studentSession.answers : [],
-                updatedAt: studentSession.updatedAt || new Date().toISOString()
-              };
-            }
-          }
-        }
         const deletedQuizIds = Array.isArray(workspace.deletedQuizIds) ? workspace.deletedQuizIds : [];
         const existingFiles = Array.isArray(workspace.resultFiles) ? workspace.resultFiles : [];
         const filesById = new Map(existingFiles.map(file => [file.id, file]));
@@ -553,21 +587,12 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
         }
         const resultFileUpdate = await supabase.from('quiz_workspace').upsert({
           id: 1,
-          data: { ...workspace, activeStudentSessions, resultFiles: [...filesById.values()], studentQuestionOrders: { ...(workspace.studentQuestionOrders || {}), ...(stateToPersist.studentQuestionOrders || {}) } },
+          data: { ...workspace, resultFiles: [...filesById.values()], studentQuestionOrders: { ...(workspace.studentQuestionOrders || {}), ...(stateToPersist.studentQuestionOrders || {}) } },
           updated_at: new Date().toISOString()
         }).select('data').single();
         if (resultFileUpdate.error) {
           reportError('student workspace synchronization', resultFileUpdate.error);
           if (optionsToPersist.waitForSync) throw resultFileUpdate.error;
-        } else if (studentSession?.username && studentSession.quizId) {
-          const sessionKey = `${studentSession.quizId}:${studentSession.username.toLowerCase()}`;
-          const persistedSession = resultFileUpdate.data?.data?.activeStudentSessions?.[sessionKey];
-          if (studentSession.completed ? persistedSession : !persistedSession
-            || persistedSession.updatedAt !== studentSession.updatedAt) {
-            const error = new Error('Supabase did not confirm the latest saved quiz progress.');
-            reportError('student attempt verification', error);
-            if (optionsToPersist.waitForSync) throw error;
-          }
         }
         return;
       }

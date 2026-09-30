@@ -1,7 +1,7 @@
 function courseDisplayValue(value) { const normalized = String(value || '').trim(); return normalized === '34' || normalized.toLowerCase() === 'course' ? '' : normalized; }
 function studentCourseDetails() { const courseName = courseDisplayValue(state.config.courseName); const courseCode = courseDisplayValue(state.config.courseCode); return courseName || courseCode ? `<div class="course-banner">${courseName ? `<strong>${esc(courseName)}</strong>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''; }
 import { supabase } from './supabase.js';
-import { deleteQuizAttempts, hydrateQuizState, persistActivityClear, persistQuestionToSupabase, persistQuizState } from './supabaseStore.js';
+import { claimStudentAttempt, deleteQuizAttempts, deleteStudentAttempt, hydrateQuizState, persistActivityClear, persistQuestionToSupabase, persistQuizState, persistStudentAttempt } from './supabaseStore.js';
 import { loadLiveStudentUsernames, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { shortAnswerMatchScore } from './shortAnswerMatching.js';
 
@@ -206,6 +206,8 @@ let teacherDeadlineTimer = null;
 let teacherMutationInFlight = false;
 let studentHeartbeatTimer = null;
 let studentQuizRefreshTimer = null;
+let studentAttemptSaveTimer = null;
+let studentAttemptSaveQueue = Promise.resolve();
 let presenceWindowBound = false;
 const SESSION_KEY = 'online-quiz-window-session-v1';
 function cleanLiveCourseValue(value, legacyValue) { return String(value || '').trim() === legacyValue ? '' : String(value || ''); }
@@ -239,7 +241,57 @@ function saveState(options = {}) { localStorage.setItem(STORAGE_KEY, JSON.string
 function restoreState(snapshot) { state = snapshot; localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
 function saveTeacherDraft(form) { const values = {}; form.querySelectorAll('input, textarea, select').forEach(field => { if (!field.name) return; if (values[field.name] === undefined) values[field.name] = field.value; else values[field.name] = Array.isArray(values[field.name]) ? [...values[field.name], field.value] : [values[field.name], field.value]; }); state.drafts[teacherView] = values; saveState({ localOnly: form.id === 'question-form' || form.id === 'short-answer-form' }); }
 function restoreTeacherDrafts() { const draft = state.drafts[teacherView]; if (!draft) return; document.querySelectorAll('#question-form input, #question-form textarea, #question-form select, #short-answer-form input, #short-answer-form textarea, #short-answer-form select, #config-form input, #config-form select').forEach(field => { const stored = draft[field.name]; if (stored === undefined) return; const index = [...document.querySelectorAll(`[name="${field.name}"]`)].indexOf(field); field.value = Array.isArray(stored) ? (stored[index] || '') : stored; }); }
-function saveStudentSession() { if (session?.role === 'student' && !session.completed) { session.updatedAt = new Date().toISOString(); state.studentSessions[session.username] = { ...session }; saveState(); } }
+function saveStudentSession(options = {}) {
+  if (!session || session.role !== 'student' || session.completed) return;
+  session.updatedAt = new Date().toISOString();
+  state.studentSessions[session.username] = { ...session };
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+  if (options.localOnly || session.attemptGeneration == null || !session.attemptOwnerToken) return;
+  clearTimeout(studentAttemptSaveTimer);
+  const targetSession = session;
+  studentAttemptSaveTimer = setTimeout(() => {
+    void syncStudentAttempt(targetSession).catch(error => reportStudentAttemptSaveError(targetSession, error));
+  }, options.immediate ? 0 : 400);
+}
+
+function syncStudentAttempt(targetSession) {
+  clearTimeout(studentAttemptSaveTimer);
+  studentAttemptSaveTimer = null;
+  const save = studentAttemptSaveQueue.catch(() => {}).then(async () => {
+    if (targetSession.attemptGeneration == null || targetSession.attemptRevision == null || !targetSession.attemptOwnerToken) {
+      throw new Error('This device has not claimed the active attempt from Supabase.');
+    }
+    const revision = await persistStudentAttempt(targetSession);
+    targetSession.attemptRevision = revision;
+    targetSession.attemptSyncError = '';
+    if (session === targetSession) {
+      session.attemptRevision = revision;
+      session.attemptSyncError = '';
+      state.studentSessions[session.username] = { ...session };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+    }
+    return revision;
+  });
+  studentAttemptSaveQueue = save;
+  return save;
+}
+
+function reportStudentAttemptSaveError(targetSession, error) {
+  const message = error?.message || String(error);
+  const shouldNotify = targetSession.attemptSyncError !== message;
+  targetSession.attemptSyncError = message;
+  if (session === targetSession) {
+    state.studentSessions[session.username] = { ...session };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+    if (shouldNotify) showToast(`Quiz progress has not synced to Supabase: ${message}`, 'error');
+  }
+}
+
+async function flushStudentAttemptSave(targetSession = session) {
+  clearTimeout(studentAttemptSaveTimer);
+  studentAttemptSaveTimer = null;
+  return syncStudentAttempt(targetSession);
+}
 function clearStudentSession(username) { delete state.studentSessions[username]; saveState(); }
 function esc(value = '') { return String(value).replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[char])); }
 function formatDate(value) { if (!value) return 'Not scheduled'; return new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }); }
@@ -458,15 +510,36 @@ async function startStudentQuiz() {
   if (quizHasEnded()) return showToast('This quiz has ended.');
   if (!state.questionsPublished) return showToast('The teacher has not submitted a quiz yet.');
   if (!state.currentQuizId || session.quizId !== state.currentQuizId) return showToast('This quiz is not available in your current session.');
+  if (session.attemptGeneration == null || session.attemptRevision == null || !session.attemptOwnerToken) {
+    try {
+      const studentAccount = state.users.find(user => user.username === session.username);
+      if (!studentAccount) throw new Error('The student account is not available in this browser.');
+      const claimedAttempt = await claimStudentAttempt(state.currentQuizId, session.username, studentAccount.password, session);
+      session.attemptGeneration = claimedAttempt.generation;
+      session.attemptRevision = claimedAttempt.revision;
+      session.attemptOwnerToken = claimedAttempt.ownerToken;
+      if (claimedAttempt.data?.started) {
+        const questionOrder = (claimedAttempt.data.questionOrderIds || [])
+          .map(id => state.questions.find(question => question.id === id))
+          .filter(Boolean);
+        if (questionOrder.length === state.questions.length) {
+          session = { ...session, ...claimedAttempt.data, questionOrder, originalQuestions: session.originalQuestions, attemptGeneration: claimedAttempt.generation, attemptRevision: claimedAttempt.revision };
+          state.questions = questionOrder;
+        }
+      }
+    } catch (error) {
+      return showToast(`Your saved quiz progress could not be loaded from Supabase: ${error.message || error}`, 'error');
+    }
+  }
   if (!session.started) session.remaining = Math.max(60, Number(state.config.duration) * 60);
   session.started = true;
   if (!Number.isFinite(Date.parse(session.deadlineAt || ''))) {
     session.deadlineAt = new Date(Date.now() + session.remaining * 1000).toISOString();
   }
   void markStudentOnline(session.username, session.quizId);
-  saveStudentSession();
+  saveStudentSession({ localOnly: true });
   try {
-    await persistQuizState(state, 'student', { waitForSync: true, username: session.username });
+    await flushStudentAttemptSave();
   } catch (error) {
     session.started = false;
     session.deadlineAt = null;
@@ -595,7 +668,7 @@ function bindEvents() { applyBranding(); const totalQuestionsField = document.qu
       }
       state.config.courseName = cleanLiveCourseValue(state.config.courseName, 'Course');
       state.config.courseCode = cleanLiveCourseValue(state.config.courseCode, '34');
-      saveState();
+      saveState({ localOnly: true });
       const availabilityChanged = previousNotStarted !== quizHasNotStarted();
       const quizStateChanged = previousQuizId !== state.currentQuizId
         || previousPublished !== state.questionsPublished
@@ -675,13 +748,55 @@ async function handleLogin(event) {
     app();
     return;
   }
-  const savedSession = state.studentSessions[student.username];
+  let savedSession = state.studentSessions[student.username];
   const originalQuestions = state.questions;
-  const savedQuestionOrder = savedSession?.questionOrder?.length
+  const localQuestionOrder = savedSession?.questionOrder?.length
     ? savedSession.questionOrder
     : Array.isArray(savedSession?.questionOrderIds)
       ? savedSession.questionOrderIds.map(id => originalQuestions.find(question => question.id === id)).filter(Boolean)
       : [];
+  const initialQuestionOrder = localQuestionOrder.length === originalQuestions.length
+    ? localQuestionOrder
+    : shuffleQuestions(originalQuestions, username);
+  const initialSession = savedSession?.quizId === state.currentQuizId
+    ? { ...savedSession, username: student.username, questionOrder: initialQuestionOrder }
+    : {
+      username: student.username,
+      quizId: state.currentQuizId,
+      questionOrder: initialQuestionOrder,
+      index: 0,
+      selected: null,
+      response: '',
+      feedback: null,
+      remaining: Math.max(60, Number(state.config.duration) * 60),
+      answers: [],
+      started: false
+    };
+  if (state.questionsPublished && state.currentQuizId) {
+    try {
+      const claimedAttempt = await claimStudentAttempt(state.currentQuizId, student.username, password, initialSession);
+      const remoteAttempt = claimedAttempt.data || {};
+      const remoteQuestionOrder = Array.isArray(remoteAttempt.questionOrderIds)
+        ? remoteAttempt.questionOrderIds.map(id => originalQuestions.find(question => question.id === id)).filter(Boolean)
+        : [];
+      savedSession = {
+        ...initialSession,
+        ...remoteAttempt,
+        username: student.username,
+        quizId: state.currentQuizId,
+        questionOrder: remoteQuestionOrder.length === originalQuestions.length ? remoteQuestionOrder : initialQuestionOrder,
+        attemptGeneration: claimedAttempt.generation,
+        attemptRevision: claimedAttempt.revision,
+        attemptOwnerToken: claimedAttempt.ownerToken
+      };
+    } catch (error) {
+      showToast(`Your saved quiz progress could not be loaded from Supabase: ${error.message || error}`, 'error');
+      return;
+    }
+  }
+  const savedQuestionOrder = savedSession?.questionOrder?.length
+    ? savedSession.questionOrder
+    : initialQuestionOrder;
   const questionOrder = savedQuestionOrder.length
     ? savedQuestionOrder
     : shuffleQuestions(originalQuestions, username);
@@ -718,16 +833,16 @@ async function handleLogin(event) {
 async function logout() {
   stopTimer();
   if (session?.role === 'student') {
-    saveStudentSession();
+    saveStudentSession({ localOnly: true });
     void markStudentOffline(session.username, session.quizId);
-    const username = session.username;
+    const studentSession = session;
     state.users = state.users.map(user => user.username === session.username
       ? { ...user, status: 'offline', lastSeen: new Date().toISOString() }
       : user);
     if (session.originalQuestions) state.questions = session.originalQuestions;
-    saveState();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
     try {
-      await persistQuizState(state, 'student', { waitForSync: true, username });
+      await flushStudentAttemptSave(studentSession);
     } catch (error) {
       showToast(`You signed out, but your latest progress may not have synced: ${error.message || error}`, 'error');
     }
@@ -1106,7 +1221,11 @@ function startTimer() {
       session.deadlineAt = new Date(Date.now() + Math.max(0, session.remaining) * 1000).toISOString();
     }
     session.remaining = Math.max(0, Math.ceil((Date.parse(session.deadlineAt) - Date.now()) / 1000));
-    saveStudentSession();
+    saveStudentSession({ localOnly: true });
+    if (session.remaining % 5 === 0) {
+      const targetSession = session;
+      void syncStudentAttempt(targetSession).catch(error => reportStudentAttemptSaveError(targetSession, error));
+    }
     const timer = document.querySelector('#timer');
     if (timer) timer.textContent = formatTime(session.remaining);
     if (session.remaining <= 0) {
@@ -1175,21 +1294,30 @@ function finalizeStudentResult(studentSession, autoSubmitted) {
 async function finishQuiz(autoSubmitted) {
   stopTimer();
   if (!session || session.completed) return;
+  try {
+    await flushStudentAttemptSave(session);
+  } catch (error) {
+    session.attemptSyncError = error.message || String(error);
+    state.studentSessions[session.username] = { ...session };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+    showToast(`The quiz was not submitted because the latest progress could not be confirmed in Supabase: ${error.message || error}`, 'error');
+    return;
+  }
   const result = finalizeStudentResult(session, autoSubmitted);
   session.completed = true;
   session.result = result;
   session.updatedAt = new Date().toISOString();
-  state.studentSessions[session.username] = { ...session };
   state.activity.unshift({ text: `${session.username} ${autoSubmitted ? 'was auto-submitted' : 'completed the quiz'}`, type: 'check', time: new Date().toISOString() });
   state.activity = state.activity.slice(0, 20);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   try {
     await persistQuizState(state, 'student', { waitForSync: true, username: session.username });
+    await deleteStudentAttempt(session);
     delete state.studentSessions[session.username];
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
     showToast('Your answers were saved successfully.');
   } catch (error) {
-    showToast(`Your result was saved locally, but Supabase synchronization failed: ${error.message || error}`, 'error');
+    showToast(`Your result was saved locally, but Supabase synchronization or attempt cleanup failed: ${error.message || error}`, 'error');
   }
   app();
 }
