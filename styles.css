@@ -71,6 +71,7 @@ tr:last-child td { border: 0; }
 .activity-icon { display: grid; place-items: center; width: 29px; height: 29px; border-radius: 8px; background: var(--teal-soft); color: var(--teal); }
 .activity-time { color: var(--muted); font: 10px DM Mono, monospace; }
 .form-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+.short-answer-form-grid { grid-template-columns: minmax(0, 1fr) 100px; }
 .field { display: grid; gap: 7px; }
 .field.full { grid-column: 1 / -1; }
 .field label { color: var(--muted); font: 500 10px DM Mono, monospace; text-transform: uppercase; }
@@ -142,4 +143,4 @@ tr:last-child td { border: 0; }
 .toast.error { background: var(--coral); }
 .toast.show { opacity: 1; transform: translateY(0); }
 @media (max-width: 900px) { .shell { grid-template-columns: 1fr; } .sidebar { padding: 15px 16px; } .brand { padding: 0 3px 16px; } .nav-label, .sidebar-foot { display: none; } .nav { display: flex; overflow-x: auto; } .nav button { flex: 0 0 auto; } .main { padding: 25px 20px 40px; } .stat-grid { grid-template-columns: repeat(2, 1fr); } .two-col { grid-template-columns: 1fr; } }
-@media (max-width: 620px) { .login-page { grid-template-columns: 1fr; } .login-art { min-height: 290px; padding: 25px; } .art-copy { margin: auto 0 0; } .art-copy h1 { font-size: 45px; } .art-copy p, .art-note { display: none; } .login-side { padding: 28px 20px; } .topbar { align-items: flex-start; flex-direction: column; } .form-grid { grid-template-columns: 1fr; } .field.full { grid-column: auto; } .panel { padding: 17px; } .quiz-top { align-items: flex-start; flex-direction: column; margin-bottom: 33px; } .quiz-card { padding: 22px; } .quiz-question { font-size: 23px; } }
+@media (max-width: 620px) { .login-page { grid-template-columns: 1fr; } .login-art { min-height: 290px; padding: 25px; } .art-copy { margin: auto 0 0; } .art-copy h1 { font-size: 45px; } .art-copy p, .art-note { display: none; } .login-side { padding: 28px 20px; } .topbar { align-items: flex-start; flex-direction: column; } .form-grid, .short-answer-form-grid { grid-template-columns: 1fr; } .field.full { grid-column: auto; } .panel { padding: 17px; } .quiz-top { align-items: flex-start; flex-direction: column; margin-bottom: 33px; } .quiz-card { padding: 22px; } .quiz-question { font-size: 23px; } }

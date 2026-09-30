@@ -171,6 +171,19 @@ function questionForWorkspace(question) {
   return savedQuestion;
 }
 
+function mergeQuestionBank(localQuestions, remoteQuestions) {
+  const remoteById = new Map(remoteQuestions.map(question => [question.id, question]));
+  return localQuestions.map(question => {
+    const remoteQuestion = remoteById.get(question.id);
+    if (!remoteQuestion) return questionForWorkspace(question);
+    const localVersion = Date.parse(question.metadataUpdatedAt || '') || 0;
+    const remoteVersion = Date.parse(remoteQuestion.metadataUpdatedAt || '') || 0;
+    return questionForWorkspace(remoteVersion > localVersion
+      ? { ...question, ...remoteQuestion, id: question.id }
+      : question);
+  });
+}
+
 function restoreQuestionMetadata(questions, ...metadataSources) {
   const savedById = new Map(metadataSources.flat().map(question => [question.id, question]));
   return questions.map(question => {
@@ -498,11 +511,15 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
         return;
       }
       const latestWorkspace = latestWorkspaceResult.data?.data || {};
+      const questionBank = mergeQuestionBank(
+        stateToPersist.questions,
+        Array.isArray(latestWorkspace.questionBank) ? latestWorkspace.questionBank : []
+      );
       const workspaceResult = await supabase.from('quiz_workspace').upsert({
         id: 1,
         data: {
           ...latestWorkspace,
-          questionBank: stateToPersist.questions.map(questionForWorkspace),
+          questionBank,
           courseName: stateToPersist.config.courseName || '',
           courseCode: stateToPersist.config.courseCode || '',
           users: stateToPersist.users,
@@ -614,6 +631,14 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
       if (optionsToPersist.waitForSync) throw latestWorkspaceResult.error;
     }
     const latestWorkspace = latestWorkspaceResult.data?.data || {};
+    const questionBank = mergeQuestionBank(
+      stateToPersist.questions,
+      Array.isArray(latestWorkspace.questionBank)
+        ? latestWorkspace.questionBank
+        : Array.isArray(latestWorkspace.currentQuizQuestions?.questions)
+          ? latestWorkspace.currentQuizQuestions.questions
+          : []
+    );
     const deletedQuizIds = new Set([...(latestWorkspace.deletedQuizIds || []), ...(stateToPersist.deletedQuizIds || [])]);
     const resultFilesById = new Map();
     for (const file of latestWorkspace.resultFiles || []) {
@@ -624,7 +649,7 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
     }
     const questionSnapshot = {
       quizId: stateToPersist.currentQuizId,
-      questions: stateToPersist.questions.map(questionForWorkspace)
+      questions: questionBank
     };
     const workspaceResult = await supabase.from('quiz_workspace').upsert({
       id: 1,
@@ -632,6 +657,7 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
         ...latestWorkspace,
         courseName: stateToPersist.config.courseName || '',
         courseCode: stateToPersist.config.courseCode || '',
+        questionBank,
         currentQuizQuestions: questionSnapshot,
         users: stateToPersist.users,
         importedFile: stateToPersist.importedFile,
