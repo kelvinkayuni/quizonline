@@ -53,6 +53,8 @@ using (true)
 with check (true);
 ```
 
+Question type and expected-answer metadata are stored in the `questionBank` array in `quiz_workspace.data`. The `questions` table stores the common question fields; hydration overlays the workspace metadata so short-answer questions are not interpreted as multiple choice.
+
 For accurate live-student counts across browsers, also run:
 
 ```sql

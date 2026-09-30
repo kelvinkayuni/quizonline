@@ -245,6 +245,7 @@ function esc(value = '') { return String(value).replace(/[&<>'"]/g, char => ({ '
 function formatDate(value) { if (!value) return 'Not scheduled'; return new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }); }
 function toDateTimeLocal(value) { if (!value) return ''; const date = new Date(value); if (Number.isNaN(date.getTime())) return ''; const pad = number => String(number).padStart(2, '0'); return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`; }
 function normalizeQuestion(row) { return { id: row.id, text: row.text, type: row.type === 'short-answer' ? 'short-answer' : 'multiple-choice', answer: String(row.answer || ''), choices: Array.isArray(row.choices) ? row.choices : [], correct: Number(row.correct) || 0, marks: Number(row.marks) || 1 }; }
+function restoreQuestionMetadata(questions, savedQuestions) { const savedById = new Map(savedQuestions.map(question => [question.id, question])); return questions.map(question => { const savedQuestion = savedById.get(question.id); return savedQuestion ? { ...question, ...savedQuestion, id: question.id } : question; }); }
 function shuffleQuestions(questions, seed = '') { const shuffled = [...questions]; let hash = 2166136261; for (const character of `${seed}:${state.currentQuizId || ''}`) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619); for (let index = shuffled.length - 1; index > 0; index--) { hash = Math.imul(hash ^ (hash >>> 13), 16777619); const swapIndex = (hash >>> 0) % (index + 1); [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]]; } return shuffled; }
 function quizIsLocked() { return Boolean(state.questionsPublished && !state.quizStopped && !quizHasEnded()); }
 function quizHasEnded() { return Boolean(state.config.end && Date.now() >= new Date(state.config.end).getTime()); }
@@ -1159,18 +1160,31 @@ refreshStudentQuizStateRaw = async function refreshQuestionTypesForStudent() {
   await refreshStudentQuizQuestions();
   if (session && session.quizId !== previousQuizId) session.response = '';
   const { data, error } = await supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle();
-  const snapshot = data?.data?.currentQuizQuestions;
-  if (error || snapshot?.quizId !== state.currentQuizId || !Array.isArray(snapshot?.questions)) {
-    const previousById = new Map(previousQuestions.map(question => [question.id, question]));
-    state.questions = state.questions.map(question => {
-      const previous = previousById.get(question.id);
-      return previous?.type === 'short-answer'
-        ? { ...question, type: 'short-answer', answer: previous.answer }
-        : question;
-    });
+  if (error) {
+    state.questions = restoreQuestionMetadata(state.questions, previousQuestions);
+    if (session?.started && Array.isArray(session.questionOrder)) {
+      session.questionOrder = restoreQuestionMetadata(session.questionOrder, previousQuestions);
+      state.questions = session.questionOrder;
+    }
     return;
   }
-  state.questions = snapshot.questions;
+  const questionBank = data?.data?.questionBank;
+  const snapshot = data?.data?.currentQuizQuestions;
+  const savedQuestionMetadata = [
+    ...(Array.isArray(snapshot?.questions) ? snapshot.questions : []),
+    ...(Array.isArray(questionBank) ? questionBank : previousQuestions)
+  ];
+  state.questions = restoreQuestionMetadata(state.questions, savedQuestionMetadata);
+  if (session?.started && Array.isArray(session.questionOrder)) {
+    session.questionOrder = restoreQuestionMetadata(session.questionOrder, savedQuestionMetadata);
+    state.questions = session.questionOrder;
+  }
+  if (snapshot?.quizId !== state.currentQuizId || !Array.isArray(snapshot?.questions)) {
+    return;
+  }
+  state.questions = session?.started && Array.isArray(session.questionOrder)
+    ? session.questionOrder
+    : snapshot.questions;
 };
 
 session = restoreWindowSession();

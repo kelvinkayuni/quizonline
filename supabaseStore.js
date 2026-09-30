@@ -171,6 +171,16 @@ function questionForWorkspace(question) {
   return savedQuestion;
 }
 
+function restoreQuestionMetadata(questions, ...metadataSources) {
+  const savedById = new Map(metadataSources.flat().map(question => [question.id, question]));
+  return questions.map(question => {
+    const savedQuestion = savedById.get(question.id);
+    return savedQuestion
+      ? { ...question, ...savedQuestion, id: question.id }
+      : question;
+  });
+}
+
 export async function hydrateQuizState(state, role = 'teacher', persist = true, username = '') {
   const unconfirmedLocalQuestions = role === 'teacher'
     ? state.questions.filter(question => question.syncStatus === 'pending' || question.syncStatus === 'failed')
@@ -264,15 +274,11 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true, 
     state.configResetAt = workspace.configResetAt || state.configResetAt || '';
     if (state.configResetAt && state.configResetAt !== previousConfigResetAt) delete state.drafts.config;
     const snapshotQuestions = workspace.currentQuizQuestions?.questions;
-    if (Array.isArray(snapshotQuestions)) {
-      const snapshotById = new Map(snapshotQuestions.map(question => [question.id, question]));
-      state.questions = state.questions.map(question => {
-        const savedQuestion = snapshotById.get(question.id);
-        return savedQuestion?.type === 'short-answer'
-          ? { ...question, type: 'short-answer', answer: String(savedQuestion.answer || '') }
-          : question;
-      });
-    }
+    state.questions = restoreQuestionMetadata(
+      state.questions,
+      Array.isArray(snapshotQuestions) ? snapshotQuestions : [],
+      Array.isArray(workspace.questionBank) ? workspace.questionBank : []
+    );
     if (workspace.currentQuizQuestions?.quizId === state.currentQuizId && Array.isArray(snapshotQuestions)) {
       state.questions = mergeUnconfirmedLocalQuestions(
         snapshotQuestions.map(normalizeQuestion),
@@ -351,11 +357,21 @@ export function persistQuestionToSupabase(state, localId) {
     if (workspaceResult.error) throw workspaceResult.error;
 
     const workspace = workspaceResult.data?.data || {};
+    const questionBank = Array.isArray(workspace.questionBank)
+      ? workspace.questionBank.map(item => ({ ...item }))
+      : Array.isArray(workspace.currentQuizQuestions?.questions)
+        ? workspace.currentQuizQuestions.questions.map(item => ({ ...item }))
+        : [];
+    const savedQuestion = questionForWorkspace(questionForSync);
+    const bankIndex = questionBank.findIndex(item =>
+      item.id === savedId || item.id === localId || item.localId === localId || sameQuestionRow(item, savedQuestion)
+    );
+    if (bankIndex >= 0) questionBank[bankIndex] = savedQuestion;
+    else questionBank.push(savedQuestion);
     const currentSnapshot = workspace.currentQuizQuestions;
     const savedQuestions = Array.isArray(currentSnapshot?.questions)
       ? currentSnapshot.questions.map(item => ({ ...item }))
       : [];
-    const savedQuestion = questionForWorkspace(questionForSync);
     const snapshotIndex = savedQuestions.findIndex(item =>
       item.id === savedId || item.id === localId || item.localId === localId || sameQuestionRow(item, savedQuestion)
     );
@@ -366,6 +382,7 @@ export function persistQuestionToSupabase(state, localId) {
       id: 1,
       data: {
         ...workspace,
+        questionBank,
         courseName: state.config.courseName || '',
         courseCode: state.config.courseCode || '',
         currentQuizQuestions: {
@@ -485,6 +502,7 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
         id: 1,
         data: {
           ...latestWorkspace,
+          questionBank: stateToPersist.questions.map(questionForWorkspace),
           courseName: stateToPersist.config.courseName || '',
           courseCode: stateToPersist.config.courseCode || '',
           users: stateToPersist.users,
