@@ -54,7 +54,7 @@ using (true)
 with check (true);
 ```
 
-Question type and expected-answer metadata are stored in the `questionBank` array in `quiz_workspace.data`. The `questions` table stores the common question fields; hydration overlays the workspace metadata so short-answer questions are not interpreted as multiple choice.
+Question type and expected-answer metadata are stored in the `questionBank` array in `quiz_workspace.data`. The `questions` table stores the common question fields; hydration overlays the workspace metadata so short-answer questions are not interpreted as multiple choice. Multiple-choice saves write directly to their `questions` row and can proceed independently; repeated saves to the same question remain ordered. Short-answer saves keep the existing workspace metadata synchronization path.
 
 For accurate live-student counts across browsers, also run:
 

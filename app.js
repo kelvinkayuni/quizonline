@@ -1,7 +1,7 @@
 function courseDisplayValue(value) { const normalized = String(value || '').trim(); return normalized === '34' || normalized.toLowerCase() === 'course' ? '' : normalized; }
 function studentCourseDetails() { const courseName = courseDisplayValue(state.config.courseName); const courseCode = courseDisplayValue(state.config.courseCode); return courseName || courseCode ? `<div class="course-banner">${courseName ? `<strong>${esc(courseName)}</strong>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''; }
 import { supabase } from './supabase.js';
-import { claimStudentAttempt, deleteQuizAttempts, hydrateQuizState, loadStudentQuizResult, persistActivityClear, persistQuestionToSupabase, persistQuizState, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt } from './supabaseStore.js';
+import { claimStudentAttempt, deleteQuizAttempts, hydrateQuizState, loadStudentQuizResult, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuestionToSupabase, persistQuizState, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt } from './supabaseStore.js';
 import { loadLiveStudentUsernames, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { shortAnswerMatchScore } from './shortAnswerMatching.js';
 
@@ -861,6 +861,7 @@ async function handleLogin(event) {
     if (password !== TEACHER.password) return showToast('Incorrect Username or Password');
     session = { role: 'teacher', username: TEACHER.username };
     teacherView = 'overview';
+    resumePendingMultipleChoiceSaves();
     app();
     return;
   }
@@ -1089,12 +1090,14 @@ function saveQuestionLocally(question) {
   state.activity = state.activity.slice(0, 20);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
   app();
-  void syncQuestionInBackground(localId, version, questionNumber);
+  void syncQuestionInBackground(localId, version, questionNumber, savedLocally);
 }
 
-async function syncQuestionInBackground(localId, version, questionNumber) {
+async function syncQuestionInBackground(localId, version, questionNumber, questionSnapshot) {
   try {
-    const savedId = await persistQuestionToSupabase(state, localId);
+    const savedId = questionSnapshot.type === 'short-answer'
+      ? await persistQuestionToSupabase(state, localId)
+      : await persistMultipleChoiceQuestionToSupabase(questionSnapshot, localId);
     const question = state.questions.find(item => item.localId === localId || item.id === localId);
     if (!question) return;
     question.id = savedId;
@@ -1115,6 +1118,18 @@ async function syncQuestionInBackground(localId, version, questionNumber) {
     showToast(`Q${questionNumber} failed to save to Supabase. It remains saved locally; edit and retry.`, 'error');
   }
   app();
+}
+function resumePendingMultipleChoiceSaves() {
+  if (session?.role !== 'teacher') return;
+  state.questions.forEach((question, index) => {
+    if (question.type === 'short-answer' || question.syncStatus !== 'pending') return;
+    void syncQuestionInBackground(
+      question.localId || question.id,
+      question.syncVersion || 1,
+      String(index + 1).padStart(2, '0'),
+      { ...question, choices: [...(question.choices || [])] }
+    );
+  });
 }
 async function confirmQuestionRemovedFromBank(questionId) {
   const [questionsResult, configResult, workspaceResult] = await Promise.all([
@@ -1722,7 +1737,7 @@ refreshStudentQuizStateRaw = async function refreshQuestionTypesForStudent() {
 
 session = restoreWindowSession();
 if (!session) app();
-stateHydrationPromise = hydrateQuizState(state, session?.role, false, session?.username || '').finally(() => { reconcileStudentSession(); cacheHydratedState(); stateHydrated = true; app(); if (session?.role === 'teacher' && state.publishConfirmationPending) { teacherMutationInFlight = true; app(); void checkPendingQuizPublication().finally(() => { teacherMutationInFlight = false; app(); }); } });
+stateHydrationPromise = hydrateQuizState(state, session?.role, false, session?.username || '').finally(() => { reconcileStudentSession(); cacheHydratedState(); stateHydrated = true; app(); if (session?.role === 'teacher') { resumePendingMultipleChoiceSaves(); if (state.publishConfirmationPending) { teacherMutationInFlight = true; app(); void checkPendingQuizPublication().finally(() => { teacherMutationInFlight = false; app(); }); } } });
 document.addEventListener('submit', async event => {
   if (event.target?.id !== 'login-form') return;
   await stateHydrationPromise;

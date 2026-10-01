@@ -10,6 +10,7 @@ const questionIdAliases = new Map();
 const SUPABASE_REQUEST_TIMEOUT = 30000;
 const QUIZ_ATTEMPT_DELETE_BATCH_SIZE = 100;
 const deletedQuizAttemptIds = new Set();
+const multipleChoiceSaveQueues = new Map();
 
 function withTimeout(request, operation) {
   let timeoutId;
@@ -418,9 +419,10 @@ function restoreQuestionMetadata(questions, ...metadataSources) {
   const savedById = new Map(metadataSources.flat().map(question => [question.id, question]));
   return questions.map(question => {
     const savedQuestion = savedById.get(question.id);
-    return savedQuestion
+    if (!savedQuestion) return question;
+    return savedQuestion.type === 'short-answer'
       ? { ...question, ...savedQuestion, id: question.id }
-      : question;
+      : { ...savedQuestion, ...question, id: question.id };
   });
 }
 
@@ -645,6 +647,57 @@ export function persistQuestionToSupabase(state, localId) {
     return savedId;
   });
   syncQueue = operation.catch(() => {});
+  return operation;
+}
+
+export function persistMultipleChoiceQuestionToSupabase(question, localId) {
+  const saveKey = localId || question?.id;
+  if (!saveKey) return Promise.reject(new Error('The multiple-choice question has no save identifier.'));
+
+  const previousSave = multipleChoiceSaveQueues.get(saveKey) || Promise.resolve();
+  const operation = previousSave.then(async () => {
+    if (!question || question.type === 'short-answer') {
+      throw new Error('A multiple-choice question is required for this save operation.');
+    }
+
+    const remoteId = questionIdAliases.get(saveKey) || (isUuid(question.id) ? question.id : null);
+    const payload = {
+      text: question.text,
+      choices: question.choices || [],
+      correct: question.correct,
+      marks: question.marks
+    };
+    let result = remoteId
+      ? await withTimeout(
+        supabase.from('questions').update(payload).eq('id', remoteId).select('id').maybeSingle(),
+        'Multiple-choice question save'
+      )
+      : await withTimeout(
+        supabase.from('questions').insert(payload).select('id').maybeSingle(),
+        'Multiple-choice question save'
+      );
+    if (result.error) throw result.error;
+    if (!result.data?.id && remoteId) {
+      result = await withTimeout(
+        supabase.from('questions').insert(payload).select('id').maybeSingle(),
+        'Multiple-choice question recovery'
+      );
+      if (result.error) throw result.error;
+    }
+
+    if (!result.data?.id) {
+      throw new Error('Supabase did not confirm the multiple-choice question row.');
+    }
+    questionIdAliases.set(saveKey, result.data.id);
+    return result.data.id;
+  });
+  const settledOperation = operation.then(() => undefined, () => undefined);
+  multipleChoiceSaveQueues.set(saveKey, settledOperation);
+  void settledOperation.then(() => {
+    if (multipleChoiceSaveQueues.get(saveKey) === settledOperation) {
+      multipleChoiceSaveQueues.delete(saveKey);
+    }
+  });
   return operation;
 }
 
