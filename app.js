@@ -1,7 +1,7 @@
 function courseDisplayValue(value) { const normalized = String(value || '').trim(); return normalized === '34' || normalized.toLowerCase() === 'course' ? '' : normalized; }
 function studentCourseDetails() { const courseName = courseDisplayValue(state.config.courseName); const courseCode = courseDisplayValue(state.config.courseCode); return courseName || courseCode ? `<div class="course-banner">${courseName ? `<strong>${esc(courseName)}</strong>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''; }
 import { supabase } from './supabase.js';
-import { claimStudentAttempt, deleteQuizAttempts, hydrateQuizState, loadStudentQuizResult, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuestionToSupabase, persistQuizState, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt } from './supabaseStore.js';
+import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, hydrateQuizState, loadStudentQuizResult, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuestionToSupabase, persistQuizState, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt } from './supabaseStore.js';
 import { loadLiveStudentUsernames, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { shortAnswerMatchScore } from './shortAnswerMatching.js';
 
@@ -1047,6 +1047,7 @@ async function confirmMultipleChoiceQuestionSaved(question) {
 
 async function saveQuestion(event) {
   event.preventDefault();
+  if (teacherMutationInFlight) return showToast('Please wait for the current teacher update to finish.');
   if (quizIsLocked()) return showToast('Stop the quiz before changing questions.');
 
   const data = new FormData(event.target);
@@ -1131,37 +1132,12 @@ function resumePendingMultipleChoiceSaves() {
     );
   });
 }
-async function confirmQuestionRemovedFromBank(questionId) {
-  const [questionsResult, configResult, workspaceResult] = await Promise.all([
-    supabase.from('questions').select('id'),
-    supabase.from('quiz_config').select('quiz_id, published').eq('id', 1).maybeSingle(),
-    supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle()
-  ]);
-  if (questionsResult.error) throw questionsResult.error;
-  if (configResult.error) throw configResult.error;
-  if (workspaceResult.error) throw workspaceResult.error;
-
-  const savedQuestions = workspaceResult.data?.data?.currentQuizQuestions;
-  const persistedIds = new Set(questionsResult.data.map(question => question.id));
-  const persistedQuizId = configResult.data?.quiz_id ?? null;
-  if (persistedIds.has(questionId)
-    || persistedIds.size !== state.questions.length
-    || state.questions.some(question => !persistedIds.has(question.id))
-    || persistedQuizId !== state.currentQuizId
-    || Boolean(configResult.data?.published)
-    || savedQuestions?.quizId !== persistedQuizId
-    || !Array.isArray(savedQuestions.questions)
-    || savedQuestions.questions.length !== state.questions.length
-    || savedQuestions.questions.some(question => question.id === questionId)
-    || state.questions.some(question => !savedQuestions.questions.some(saved => saved.id === question.id))) {
-    throw new Error('Supabase did not confirm that the question was removed from the question bank.');
-  }
-}
-
 async function deleteQuestion(id) {
   if (quizIsLocked()) return showToast('Stop the quiz before changing questions.');
   if (teacherMutationInFlight) return;
   if (!state.questions.some(question => question.id === id)) return showToast('This question is no longer in the question bank.');
+  const questionToDelete = state.questions.find(question => question.id === id);
+  const saveKey = questionToDelete.localId || questionToDelete.id;
 
   const previousState = {
     questions: structuredClone(state.questions),
@@ -1181,12 +1157,17 @@ async function deleteQuestion(id) {
     state.currentQuizId = null;
     state.studentSessions = {};
     state.config.totalQuestions = Math.min(state.config.totalQuestions || state.questions.length, state.questions.length);
-    state.activity.unshift({ text: 'A saved question was deleted', type: 'question', time: new Date().toISOString() });
+    const deletionActivity = { text: 'A saved question was deleted', type: 'question', time: new Date().toISOString() };
+    state.activity.unshift(deletionActivity);
     state.activity = state.activity.slice(0, 20);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
 
-    await persistQuizState(state, 'teacher', { waitForSync: true });
-    await confirmQuestionRemovedFromBank(id);
+    await deleteQuestionFromSupabase(
+      id,
+      saveKey,
+      state.config.totalQuestions || state.questions.length,
+      deletionActivity
+    );
     showToast('Question deleted and current quiz cleared.');
   } catch (error) {
     state.questions = previousState.questions;
@@ -1197,7 +1178,6 @@ async function deleteQuestion(id) {
     state.config = previousState.config;
     state.activity = previousState.activity;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
-    void persistQuizState(state, 'teacher');
     showToast(`Question was not confirmed deleted: ${error.message || error}`, 'error');
   } finally {
     teacherMutationInFlight = false;
@@ -1647,6 +1627,7 @@ async function confirmShortAnswerQuestionSaved(question) {
 
 function saveShortAnswerQuestion(event) {
   event.preventDefault();
+  if (teacherMutationInFlight) return showToast('Please wait for the current teacher update to finish.');
   if (quizIsLocked()) return showToast('Stop the quiz before changing questions.');
   const data = new FormData(event.target);
   const text = String(data.get('shortText') || '').trim();

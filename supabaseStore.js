@@ -701,6 +701,36 @@ export function persistMultipleChoiceQuestionToSupabase(question, localId) {
   return operation;
 }
 
+export function deleteQuestionFromSupabase(questionId, saveKey, totalQuestions, activityItem) {
+  if (!questionId) return Promise.reject(new Error('The question has no deletion identifier.'));
+  const pendingSave = multipleChoiceSaveQueues.get(saveKey) || Promise.resolve();
+  const operation = syncQueue.then(async () => {
+    await pendingSave;
+    const remoteId = questionIdAliases.get(saveKey) || questionId;
+    const { data, error } = await withTimeout(
+      supabase.rpc('delete_question_atomically', {
+        p_question_id: remoteId,
+        p_total_questions: totalQuestions,
+        p_activity_item: activityItem
+      }),
+      'Question deletion'
+    );
+    if (error) throw error;
+    if (data?.deleted !== true
+      || data.question_id !== remoteId
+      || Number(data.remaining_question_count) < 0
+      || data.quiz_id !== null
+      || data.published !== false
+      || data.stopped !== false) {
+      throw new Error('Supabase did not confirm the atomic question deletion.');
+    }
+    questionIdAliases.delete(saveKey);
+    return data;
+  });
+  syncQueue = operation.catch(() => {});
+  return operation;
+}
+
 export function persistActivityClear(state, clearedAt) {
   const operation = syncQueue.then(async () => {
     const workspaceResult = await withTimeout(
