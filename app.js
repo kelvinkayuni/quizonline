@@ -1,7 +1,7 @@
 function courseDisplayValue(value) { const normalized = String(value || '').trim(); return normalized === '34' || normalized.toLowerCase() === 'course' ? '' : normalized; }
 function studentCourseDetails() { const courseName = courseDisplayValue(state.config.courseName); const courseCode = courseDisplayValue(state.config.courseCode); return courseName || courseCode ? `<div class="course-banner">${courseName ? `<strong>${esc(courseName)}</strong>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''; }
 import { supabase } from './supabase.js';
-import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, hydrateQuizState, loadStudentQuizReport, loadStudentQuizResult, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt } from './supabaseStore.js';
+import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, hydrateQuizState, listTeacherQuizQuestionHistory, loadStudentQuizReport, loadStudentQuizResult, loadTeacherQuizQuestionHistory, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt } from './supabaseStore.js';
 import { loadLiveStudentUsernames, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { shortAnswerMatchScore } from './shortAnswerMatching.js';
 
@@ -160,8 +160,7 @@ async function saveConfig(event) {
 
 const STORAGE_KEY = 'online-quiz-state-v1';
 const APP_USERNAME = __APP_USERNAME__;
-const APP_PASSWORD = __APP_PASSWORD__;
-const TEACHER = { username: APP_USERNAME, password: APP_PASSWORD };
+const TEACHER = { username: APP_USERNAME, email: 'kelvinkayuni13@gmail.com' };
 const defaultState = {
   questions: [],
   questionsPublished: false,
@@ -197,6 +196,9 @@ if (typeof state.studentLoginActive !== 'boolean') state.studentLoginActive = fa
 if (typeof state.configSaved !== 'boolean') state.configSaved = false;
 if (!state.importedFile) { state.users = []; saveState(); }
 let teacherView = 'overview';
+let teacherQuestionHistory = [];
+let questionHistoryVisible = false;
+let questionHistoryLoading = false;
 let timerId = null;
 let editingQuestionId = null;
 let expandedQuestionIds = new Set();
@@ -365,7 +367,10 @@ async function refreshTeacherQuizState() { if (!session || session.role !== 'tea
 async function refreshStudentQuizStateRaw() { if (!session || session.role !== 'student') return; const [configResult, questionsResult, workspaceResult] = await Promise.all([supabase.from('quiz_config').select('quiz_id, published, stopped, total_questions, duration, start_time, end_time, course_name, course_code').eq('id', 1).maybeSingle(), supabase.from('questions').select('*').order('created_at'), supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle()]); if (questionsResult.error) return; const config = configResult.data; const workspace = workspaceResult.data?.data || {}; const previousQuizId = state.currentQuizId; const previousStopped = state.quizStopped; const previousPublished = state.questionsPublished; const previousQuestionCount = state.questions.length; state.questions = questionsResult.data.map(normalizeQuestion); state.currentQuizId = config?.quiz_id || null; state.quizStopped = Boolean(config?.stopped); state.questionsPublished = Boolean(config?.published) && !state.quizStopped && state.questions.length > 0; state.config = { ...state.config, courseName: config?.course_name || workspace.courseName || state.config.courseName || '', courseCode: config?.course_code || workspace.courseCode || state.config.courseCode || '', totalQuestions: Number(config?.total_questions) || 0, duration: Number(config?.duration) || 0, start: toDateTimeLocal(config?.start_time), end: toDateTimeLocal(config?.end_time) }; const quizChanged = Boolean(state.currentQuizId && state.currentQuizId !== previousQuizId); const quizRemoved = Boolean(previousQuizId) && (!state.questionsPublished || state.quizStopped || !state.currentQuizId); const quizStateChanged = quizChanged || quizRemoved || state.quizStopped !== previousStopped || state.questionsPublished !== previousPublished || state.questions.length !== previousQuestionCount; if (quizStateChanged) { if (quizRemoved && previousQuizId) { state.results = state.results.filter(result => result.quizId !== previousQuizId); state.studentHistory = state.studentHistory.filter(result => result.quizId !== previousQuizId); state.resultFiles = state.resultFiles.filter(file => !file.id.includes(previousQuizId)); } stopTimer(); session.started = false; session.quizId = state.currentQuizId; session.completed = false; session.result = null; session.selected = null; session.feedback = null; session.index = 0; session.answers = []; session.questionOrder = null; saveStudentSession(); app(); if (state.questionsPublished && quizChanged) showToast('New quiz available. You can start now.'); } }
 function activityList() { if (!state.activity.length) return '<div class="empty">No activity recorded yet. Your workspace will appear here as students participate.</div>'; return `<div class="activity">${state.activity.slice(0, 6).map(item => `<div class="activity-item"><span class="activity-icon">${icon(item.type || 'book')}</span><div>${esc(item.text)}<br><span class="subtle">${formatDate(item.time)}</span></div><span class="activity-time">${new Date(item.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></div>`).join('')}</div>`; }
 async function downloadCorrectionsPdf() {
-  if (!state.questions.length) return showToast('There are no saved questions to download.');
+  return downloadQuestionCorrectionsPdf(state.questions, state.config);
+}
+async function downloadQuestionCorrectionsPdf(questions, config, quizId = '') {
+  if (!questions.length) return showToast('There are no saved questions to download.');
   try {
     const { jsPDF } = await import('jspdf');
     const pdf = new jsPDF({ format: 'a4', unit: 'mm' });
@@ -397,12 +402,12 @@ async function downloadCorrectionsPdf() {
     };
 
     pdf.setProperties({ title: 'Question corrections', subject: 'Saved questions and answer key' });
-    addText('Question corrections', { fontSize: 20, lineHeight: 9, bold: true });
-    const courseHeading = [courseDisplayValue(state.config.courseName), courseDisplayValue(state.config.courseCode)]
+    addText(quizId ? `Question history · ${quizId}` : 'Question corrections', { fontSize: 20, lineHeight: 9, bold: true });
+    const courseHeading = [courseDisplayValue(config.courseName), courseDisplayValue(config.courseCode)]
       .filter(Boolean)
       .join(' · ');
     if (courseHeading) addText(courseHeading, { fontSize: 11, lineHeight: 6, color: [89, 99, 106] });
-    addText(`${state.questions.length} saved question${state.questions.length === 1 ? '' : 's'} · Answer key`, {
+    addText(`${questions.length} saved question${questions.length === 1 ? '' : 's'} · Answer key`, {
       fontSize: 10,
       lineHeight: 7,
       color: [89, 99, 106]
@@ -412,7 +417,7 @@ async function downloadCorrectionsPdf() {
     pdf.line(margin, y, pageWidth - margin, y);
     y += 7;
 
-    state.questions.forEach((question, index) => {
+    questions.forEach((question, index) => {
       const isShortAnswer = question.type === 'short-answer';
       const choices = Array.isArray(question.choices) ? question.choices : [];
       const correctIndex = Number(question.correct);
@@ -470,7 +475,7 @@ async function downloadCorrectionsPdf() {
       y += 5;
     });
 
-    const fileBase = [state.config.courseCode, state.config.courseName, 'question-corrections']
+    const fileBase = [config.courseCode, config.courseName, quizId || 'question-corrections']
       .filter(Boolean)
       .join('-')
       .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '')
@@ -484,8 +489,47 @@ async function downloadCorrectionsPdf() {
     showToast(`Question corrections PDF could not be created: ${error.message || error}`, 'error');
   }
 }
+async function toggleTeacherQuestionHistory() {
+  if (questionHistoryVisible) {
+    questionHistoryVisible = false;
+    app();
+    return;
+  }
+  if (teacherMutationInFlight || questionHistoryLoading) return;
+  questionHistoryVisible = true;
+  questionHistoryLoading = true;
+  app();
+  try {
+    teacherQuestionHistory = await listTeacherQuizQuestionHistory();
+  } catch (error) {
+    questionHistoryVisible = false;
+    showToast(`Quiz question history could not be loaded: ${error.message || error}`, 'error');
+  } finally {
+    questionHistoryLoading = false;
+    app();
+  }
+}
+async function downloadArchivedQuestionSet(quizId) {
+  if (teacherMutationInFlight) return;
+  try {
+    const archive = await loadTeacherQuizQuestionHistory(quizId);
+    await downloadQuestionCorrectionsPdf(
+      archive.question_snapshot.questions,
+      { courseName: archive.course_name || '', courseCode: archive.course_code || '' },
+      archive.quiz_id
+    );
+  } catch (error) {
+    showToast(`Archived quiz questions could not be downloaded: ${error.message || error}`, 'error');
+  }
+}
+function teacherQuestionHistoryPanel() {
+  if (!questionHistoryVisible) return '';
+  if (questionHistoryLoading) return '<section class="card panel student-history-panel"><p class="subtle">Loading published question history...</p></section>';
+  if (!teacherQuestionHistory.length) return '<section class="card panel student-history-panel"><p class="subtle">No published quiz question history is available.</p></section>';
+  return `<section class="card panel student-history-panel"><div class="panel-head"><div><h2>Published quiz question history</h2><p class="subtle">Archived snapshots are separate from the current question bank.</p></div></div><div class="activity">${teacherQuestionHistory.map(item => `<div class="activity-item"><div><strong>${esc(item.quiz_id)}</strong><br><span class="subtle">${esc([item.course_name, item.course_code].filter(Boolean).join(' · ') || 'Quiz')} · ${formatDate(item.published_at)} · ${item.question_count} questions</span></div><button class="btn btn-secondary btn-small" data-action="download-question-history" data-quiz-id="${esc(item.quiz_id)}">Download PDF</button></div>`).join('')}</div></section>`;
+}
 function questionsView() { const locked = quizIsLocked(); const ended = Boolean(state.questionsPublished && !state.quizStopped && quizHasEnded());
-  return `<section class="grid two-col"><div class="card panel"><div class="panel-head"><div><h2>${editingQuestionId ? 'Edit question' : 'Create a question'}</h2><p class="subtle">Add a reusable multiple-choice question.</p></div><span class="badge">${state.questions.length} saved</span></div><form id="question-form"><input type="hidden" name="id" value="${editingQuestionId || ''}" /><div class="field"><label>Question prompt</label><textarea name="text" placeholder="Write the question students will see..." required>${editingQuestionId ? esc(state.questions.find(question => question.id === editingQuestionId)?.text || '') : ''}</textarea></div><div class="field" style="margin-top:15px"><label>Choices <span id="choice-count">(${editingQuestionId ? state.questions.find(question => question.id === editingQuestionId).choices.length : 4})</span></label><div id="choices">${choiceInputsForEditing()}</div><button type="button" class="btn btn-secondary btn-small" data-action="add-choice">+ Add choice</button></div><div class="form-grid" style="margin-top:15px"><div class="field"><label>Correct answer</label><select id="correct-answer" name="correct">${correctOptionsForEditing()}</select></div><div class="field"><label>Marks</label><input name="marks" type="number" min="1" value="${editingQuestionId ? state.questions.find(question => question.id === editingQuestionId).marks : ''}" placeholder="Enter marks" required /></div></div><div style="display:flex;gap:9px;margin-top:18px"><button class="btn btn-primary">${editingQuestionId ? 'Update question' : 'Save question'}</button>${editingQuestionId ? '<button type="button" class="btn btn-secondary" data-action="cancel-edit">Cancel</button>' : ''}</div></form></div><div class="card panel"><div class="panel-head"><div><h2>Saved questions</h2><p class="subtle">${ended ? 'This quiz ended. You can edit and submit an updated quiz.' : state.questionsPublished && !state.quizStopped ? 'Published questions are available to students.' : 'Questions stay private until you submit them.'}</p></div><div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">  <button class="btn btn-secondary btn-small" data-action="download-corrections" ${state.questions.length ? '' : 'disabled'}>Download(PDF)</button><button class="btn btn-secondary btn-small" data-action="clear-questions" ${state.questions.length ? '' : 'disabled'}>Clear all</button><button class="btn btn-primary btn-small" data-action="publish-questions" ${state.questions.length ? '' : 'disabled'}>${state.questionsPublished && !state.quizStopped && !ended ? 'Questions submitted' : 'Submit questions'}</button></div></div><div id="question-list">${questionList()}</div></div></section>`;
+  return `<section class="grid two-col"><div class="card panel"><div class="panel-head"><div><h2>${editingQuestionId ? 'Edit question' : 'Create a question'}</h2><p class="subtle">Add a reusable multiple-choice question.</p></div><span class="badge">${state.questions.length} saved</span></div><form id="question-form"><input type="hidden" name="id" value="${editingQuestionId || ''}" /><div class="field"><label>Question prompt</label><textarea name="text" placeholder="Write the question students will see..." required>${editingQuestionId ? esc(state.questions.find(question => question.id === editingQuestionId)?.text || '') : ''}</textarea></div><div class="field" style="margin-top:15px"><label>Choices <span id="choice-count">(${editingQuestionId ? state.questions.find(question => question.id === editingQuestionId).choices.length : 4})</span></label><div id="choices">${choiceInputsForEditing()}</div><button type="button" class="btn btn-secondary btn-small" data-action="add-choice">+ Add choice</button></div><div class="form-grid" style="margin-top:15px"><div class="field"><label>Correct answer</label><select id="correct-answer" name="correct">${correctOptionsForEditing()}</select></div><div class="field"><label>Marks</label><input name="marks" type="number" min="1" value="${editingQuestionId ? state.questions.find(question => question.id === editingQuestionId).marks : ''}" placeholder="Enter marks" required /></div></div><div style="display:flex;gap:9px;margin-top:18px"><button class="btn btn-primary">${editingQuestionId ? 'Update question' : 'Save question'}</button>${editingQuestionId ? '<button type="button" class="btn btn-secondary" data-action="cancel-edit">Cancel</button>' : ''}</div></form></div><div class="card panel"><div class="panel-head"><div><h2>Saved questions</h2><p class="subtle">${ended ? 'This quiz ended. You can edit and submit an updated quiz.' : state.questionsPublished && !state.quizStopped ? 'Published questions are available to students.' : 'Questions stay private until you submit them.'}</p></div><div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end"><div style="display:flex;flex-direction:column;gap:7px"><button class="btn btn-secondary btn-small" data-action="download-corrections" ${state.questions.length ? '' : 'disabled'}>Download(PDF)</button><button class="btn btn-secondary btn-small" data-action="view-question-history">${questionHistoryVisible ? 'Hide history' : 'View quiz history'}</button></div><button class="btn btn-secondary btn-small" data-action="clear-questions" ${state.questions.length ? '' : 'disabled'}>Clear all</button><button class="btn btn-primary btn-small" data-action="publish-questions" ${state.questions.length ? '' : 'disabled'}>${state.questionsPublished && !state.quizStopped && !ended ? 'Questions submitted' : 'Submit questions'}</button></div></div><div id="question-list">${questionList()}</div></div></section>${teacherQuestionHistoryPanel()}`;
 }
 function choiceInput(index) { return `<div class="choice-row"><input name="choice" data-choice="${index}" placeholder="Choice ${String.fromCharCode(65 + index)}" required /><button type="button" data-action="remove-choice" title="Remove choice">×</button></div>`; }
 function choiceInputsForEditing() { const question = editingQuestionId && state.questions.find(item => item.id === editingQuestionId); return (question ? question.choices : ['', '', '', '']).map((choice, index) => `<div class="choice-row"><input name="choice" data-choice="${index}" value="${esc(choice)}" placeholder="Choice ${String.fromCharCode(65 + index)}" required /><button type="button" data-action="remove-choice" title="Remove choice">×</button></div>`).join(''); }
@@ -832,6 +876,8 @@ function bindEvents() { applyBranding(); const totalQuestionsField = document.qu
   document.querySelectorAll('[data-action="delete-question"]').forEach(button => button.addEventListener('click', () => deleteQuestion(button.dataset.id)));
   document.querySelectorAll('[data-action="expand-question"]').forEach(button => button.addEventListener('click', () => { const id = button.dataset.id; if (expandedQuestionIds.has(id)) expandedQuestionIds.delete(id); else expandedQuestionIds.add(id); const details = document.querySelector(`#details-${id}`); details.classList.toggle('expanded'); button.textContent = details.classList.contains('expanded') ? 'Collapse' : 'Expand'; }));
   const downloadCorrectionsButton = document.querySelector('[data-action="download-corrections"]'); if (downloadCorrectionsButton) downloadCorrectionsButton.addEventListener('click', downloadCorrectionsPdf);
+  const viewQuestionHistory = document.querySelector('[data-action="view-question-history"]'); if (viewQuestionHistory) viewQuestionHistory.addEventListener('click', () => { void toggleTeacherQuestionHistory(); });
+  document.querySelectorAll('[data-action="download-question-history"]').forEach(button => button.addEventListener('click', () => { void downloadArchivedQuestionSet(button.dataset.quizId); }));
   const clearQuestions = document.querySelector('[data-action="clear-questions"]'); if (clearQuestions) clearQuestions.addEventListener('click', clearAllQuestions);
   const publishQuestions = document.querySelector('[data-action="publish-questions"]'); if (publishQuestions) publishQuestions.addEventListener('click', () => { if (teacherMutationInFlight) return; teacherMutationInFlight = true; void publishQuestionsForStudents().finally(() => { teacherMutationInFlight = false; app(); }); });
   const stopQuiz = document.querySelector('[data-action="stop-quiz"]'); if (stopQuiz) stopQuiz.addEventListener('click', stopQuizForEveryone);
@@ -865,8 +911,24 @@ async function handleLogin(event) {
   const form = new FormData(event.target);
   const username = String(form.get('username')).trim();
   const password = String(form.get('password'));
-  if (username.toLowerCase() === TEACHER.username) {
-    if (password !== TEACHER.password) return showToast('Incorrect Username or Password');
+  if (username.toLowerCase() === TEACHER.username.toLowerCase()) {
+    let authResult;
+    try {
+      authResult = await supabase.auth.signInWithPassword({ email: TEACHER.email, password });
+    } catch (error) {
+      showToast(`Teacher sign-in failed: ${error.message || error}`, 'error');
+      return;
+    }
+    if (authResult.error) return showToast(`Teacher sign-in failed: ${authResult.error.message}`, 'error');
+    const teacherUser = authResult.data?.user;
+    if (teacherUser?.email?.toLowerCase() !== TEACHER.email
+      || teacherUser.app_metadata?.role !== 'teacher') {
+      const { error } = await supabase.auth.signOut();
+      showToast(error
+        ? `This Supabase account is not configured for teacher access, and sign-out failed: ${error.message}`
+        : 'This Supabase account is not configured for teacher access. Set app_metadata.role to teacher in Supabase Auth.');
+      return;
+    }
     session = { role: 'teacher', username: TEACHER.username };
     teacherView = 'overview';
     resumePendingMultipleChoiceSaves();
@@ -992,6 +1054,13 @@ async function handleLogin(event) {
 }
 async function logout() {
   stopTimer();
+  if (session?.role === 'teacher') {
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      showToast(`Teacher sign-out failed: ${error.message}`, 'error');
+      return;
+    }
+  }
   if (session?.role === 'student') {
     if (session.resultSyncPending) {
       showToast('This result has not been confirmed in Supabase. Retry saving it before signing out.', 'error');
@@ -1799,7 +1868,34 @@ refreshStudentQuizStateRaw = async function refreshQuestionTypesForStudent() {
 
 session = restoreWindowSession();
 if (!session) app();
-stateHydrationPromise = hydrateQuizState(state, session?.role, false, session?.username || '').finally(() => { reconcileStudentSession(); cacheHydratedState(); stateHydrated = true; app(); if (session?.role === 'teacher') { resumePendingMultipleChoiceSaves(); if (state.publishConfirmationPending) { teacherMutationInFlight = true; app(); void checkPendingQuizPublication().finally(() => { teacherMutationInFlight = false; app(); }); } } });
+stateHydrationPromise = (async () => {
+  if (session?.role === 'teacher') {
+    const { data, error } = await supabase.auth.getSession();
+    const user = data?.session?.user;
+    if (error || user?.email?.toLowerCase() !== TEACHER.email || user.app_metadata?.role !== 'teacher') {
+      session = null;
+      saveWindowSession();
+      if (error) showToast(`Saved teacher session could not be verified: ${error.message}`, 'error');
+    }
+  }
+  await hydrateQuizState(state, session?.role, false, session?.username || '');
+  reconcileStudentSession();
+  cacheHydratedState();
+  stateHydrated = true;
+  app();
+  if (session?.role === 'teacher') {
+    resumePendingMultipleChoiceSaves();
+    if (state.publishConfirmationPending) {
+      teacherMutationInFlight = true;
+      app();
+      void checkPendingQuizPublication().finally(() => { teacherMutationInFlight = false; app(); });
+    }
+  }
+})().catch(error => {
+  stateHydrated = true;
+  app();
+  showToast(`Application data could not be loaded: ${error.message || error}`, 'error');
+});
 document.addEventListener('submit', async event => {
   if (event.target?.id !== 'login-form') return;
   await stateHydrationPromise;

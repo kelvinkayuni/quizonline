@@ -376,6 +376,31 @@ export async function publishQuizAtomically(state, quizId) {
   }
 }
 
+export async function listTeacherQuizQuestionHistory() {
+  const { data, error } = await withTimeout(
+    supabase.rpc('list_teacher_quiz_question_history'),
+    'Teacher quiz question history loading'
+  );
+  if (error) throw error;
+  if (!Array.isArray(data)) {
+    throw new Error('Supabase returned an invalid quiz question history list.');
+  }
+  return data;
+}
+
+export async function loadTeacherQuizQuestionHistory(quizId) {
+  if (!quizId) throw new Error('Select a quiz before downloading its question history.');
+  const { data, error } = await withTimeout(
+    supabase.rpc('load_teacher_quiz_question_history', { p_quiz_id: String(quizId) }),
+    'Archived quiz question loading'
+  );
+  if (error) throw error;
+  if (!Array.isArray(data?.question_snapshot?.questions) || !data.question_snapshot.questions.length) {
+    throw new Error('Supabase did not return the archived questions for this quiz.');
+  }
+  return data;
+}
+
 function sameQuestionRow(left, right) {
   return left.text === right.text
     && Number(left.correct) === Number(right.correct)
@@ -890,10 +915,11 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
       .filter(quizId => quizId && !deletedQuizAttemptIds.has(quizId));
     for (let offset = 0; offset < pendingQuizAttemptDeletes.length; offset += QUIZ_ATTEMPT_DELETE_BATCH_SIZE) {
       const quizIds = pendingQuizAttemptDeletes.slice(offset, offset + QUIZ_ATTEMPT_DELETE_BATCH_SIZE);
-      const deletedAttempts = await supabase.from('quiz_attempts').delete().in('quiz_id', quizIds);
-      if (deletedAttempts.error) {
-        reportError('quiz record deletion', deletedAttempts.error);
-        if (optionsToPersist.waitForSync) throw deletedAttempts.error;
+      const deletion = await supabase.rpc('delete_quiz_results_and_question_history', { p_quiz_ids: quizIds });
+      if (deletion.error || deletion.data?.deleted !== true) {
+        const deletionError = deletion.error || new Error('Supabase did not confirm quiz result and question-history deletion.');
+        reportError('quiz result and question-history deletion', deletionError);
+        if (optionsToPersist.waitForSync) throw deletionError;
       } else {
         quizIds.forEach(quizId => deletedQuizAttemptIds.add(quizId));
       }
@@ -1066,10 +1092,13 @@ export async function deleteQuizAttempts(quizIds) {
   if (!ids.length) return;
 
   const deleteResult = await withTimeout(
-    supabase.from('quiz_attempts').delete().in('quiz_id', ids),
+    supabase.rpc('delete_quiz_results_and_question_history', { p_quiz_ids: ids }),
     'Result deletion'
   );
   if (deleteResult.error) throw deleteResult.error;
+  if (deleteResult.data?.deleted !== true) {
+    throw new Error('Supabase did not confirm deletion of the selected quiz results and question history.');
+  }
 
   const verifyResult = await withTimeout(
     supabase.from('quiz_attempts').select('quiz_id').in('quiz_id', ids),
