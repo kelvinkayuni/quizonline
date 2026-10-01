@@ -10,7 +10,7 @@ const questionIdAliases = new Map();
 const SUPABASE_REQUEST_TIMEOUT = 30000;
 const QUIZ_ATTEMPT_DELETE_BATCH_SIZE = 100;
 const deletedQuizAttemptIds = new Set();
-const multipleChoiceSaveQueues = new Map();
+const questionRowSaveQueues = new Map();
 
 function withTimeout(request, operation) {
   let timeoutId;
@@ -215,7 +215,9 @@ function normalizeQuestion(row) {
     choices: Array.isArray(row.choices) ? row.choices : [],
     correct: Number(row.correct) || 0,
     answer: String(row.answer || ''),
-    marks: Number(row.marks) || 1
+    referenceAnswer: String(row.reference_answer || ''),
+    marks: Number(row.marks) || 1,
+    metadataUpdatedAt: row.metadata_updated_at || ''
   };
 }
 
@@ -420,7 +422,11 @@ function restoreQuestionMetadata(questions, ...metadataSources) {
   return questions.map(question => {
     const savedQuestion = savedById.get(question.id);
     if (!savedQuestion) return question;
-    return savedQuestion.type === 'short-answer'
+    const rowVersion = Date.parse(question.metadataUpdatedAt || '') || 0;
+    const metadataVersion = Date.parse(savedQuestion.metadataUpdatedAt || '') || 0;
+    const metadataIsNewer = metadataVersion > rowVersion
+      || (!rowVersion && !metadataVersion && savedQuestion.type === 'short-answer');
+    return metadataIsNewer
       ? { ...question, ...savedQuestion, id: question.id }
       : { ...savedQuestion, ...question, id: question.id };
   });
@@ -571,90 +577,11 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true, 
   if (persist) await persistQuizState(state, role);
 }
 
-export function persistQuestionToSupabase(state, localId) {
-  const operation = syncQueue.then(async () => {
-    const question = state.questions.find(item => item.localId === localId || item.id === localId);
-    if (!question) throw new Error('The locally saved question could not be found for synchronization.');
-
-    const questionForSync = { ...question };
-    const remoteId = questionIdAliases.get(localId) || (isUuid(questionForSync.id) ? questionForSync.id : null);
-    const payload = {
-      text: questionForSync.text,
-      choices: questionForSync.choices || [],
-      correct: questionForSync.correct,
-      marks: questionForSync.marks
-    };
-    let result = remoteId
-      ? await withTimeout(supabase.from('questions').update(payload).eq('id', remoteId).select('id').maybeSingle(), 'Question synchronization')
-      : await withTimeout(supabase.from('questions').insert(payload).select('id').maybeSingle(), 'Question synchronization');
-    if (result.error) throw result.error;
-    if (!result.data?.id && remoteId) {
-      result = await withTimeout(supabase.from('questions').insert(payload).select('id').maybeSingle(), 'Question recovery');
-      if (result.error) throw result.error;
-    }
-
-    const savedId = result.data?.id;
-    if (!savedId) throw new Error('Supabase did not return a saved question ID.');
-    question.id = savedId;
-    questionIdAliases.set(localId, savedId);
-    questionForSync.id = savedId;
-
-    const workspaceResult = await withTimeout(
-      supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle(),
-      'Question-bank workspace loading'
-    );
-    if (workspaceResult.error) throw workspaceResult.error;
-
-    const workspace = workspaceResult.data?.data || {};
-    const questionBank = Array.isArray(workspace.questionBank)
-      ? workspace.questionBank.map(item => ({ ...item }))
-      : Array.isArray(workspace.currentQuizQuestions?.questions)
-        ? workspace.currentQuizQuestions.questions.map(item => ({ ...item }))
-        : [];
-    const savedQuestion = questionForWorkspace(questionForSync);
-    const bankIndex = questionBank.findIndex(item =>
-      item.id === savedId || item.id === localId || item.localId === localId || sameQuestionRow(item, savedQuestion)
-    );
-    if (bankIndex >= 0) questionBank[bankIndex] = savedQuestion;
-    else questionBank.push(savedQuestion);
-    const currentSnapshot = workspace.currentQuizQuestions;
-    const savedQuestions = Array.isArray(currentSnapshot?.questions)
-      ? currentSnapshot.questions.map(item => ({ ...item }))
-      : [];
-    const snapshotIndex = savedQuestions.findIndex(item =>
-      item.id === savedId || item.id === localId || item.localId === localId || sameQuestionRow(item, savedQuestion)
-    );
-    if (snapshotIndex >= 0) savedQuestions[snapshotIndex] = savedQuestion;
-    else savedQuestions.push(savedQuestion);
-
-    const updatedWorkspace = await withTimeout(supabase.from('quiz_workspace').upsert({
-      id: 1,
-      data: {
-        ...workspace,
-        questionBank,
-        courseName: state.config.courseName || '',
-        courseCode: state.config.courseCode || '',
-        currentQuizQuestions: {
-          quizId: state.currentQuizId,
-          questions: savedQuestions.map(questionForWorkspace)
-        },
-        activity: state.activity
-      },
-      updated_at: new Date().toISOString()
-    }), 'Question-bank snapshot synchronization');
-    if (updatedWorkspace.error) throw updatedWorkspace.error;
-
-    return savedId;
-  });
-  syncQueue = operation.catch(() => {});
-  return operation;
-}
-
 export function persistMultipleChoiceQuestionToSupabase(question, localId) {
   const saveKey = localId || question?.id;
   if (!saveKey) return Promise.reject(new Error('The multiple-choice question has no save identifier.'));
 
-  const previousSave = multipleChoiceSaveQueues.get(saveKey) || Promise.resolve();
+  const previousSave = questionRowSaveQueues.get(saveKey) || Promise.resolve();
   const operation = previousSave.then(async () => {
     if (!question || question.type === 'short-answer') {
       throw new Error('A multiple-choice question is required for this save operation.');
@@ -665,7 +592,11 @@ export function persistMultipleChoiceQuestionToSupabase(question, localId) {
       text: question.text,
       choices: question.choices || [],
       correct: question.correct,
-      marks: question.marks
+      marks: question.marks,
+      type: 'multiple-choice',
+      answer: '',
+      reference_answer: '',
+      metadata_updated_at: question.metadataUpdatedAt || new Date().toISOString()
     };
     let result = remoteId
       ? await withTimeout(
@@ -692,10 +623,63 @@ export function persistMultipleChoiceQuestionToSupabase(question, localId) {
     return result.data.id;
   });
   const settledOperation = operation.then(() => undefined, () => undefined);
-  multipleChoiceSaveQueues.set(saveKey, settledOperation);
+  questionRowSaveQueues.set(saveKey, settledOperation);
   void settledOperation.then(() => {
-    if (multipleChoiceSaveQueues.get(saveKey) === settledOperation) {
-      multipleChoiceSaveQueues.delete(saveKey);
+    if (questionRowSaveQueues.get(saveKey) === settledOperation) {
+      questionRowSaveQueues.delete(saveKey);
+    }
+  });
+  return operation;
+}
+
+export function persistShortAnswerQuestionToSupabase(question, localId) {
+  const saveKey = localId || question?.id;
+  if (!saveKey) return Promise.reject(new Error('The short-answer question has no save identifier.'));
+  if (!question || question.type !== 'short-answer') {
+    return Promise.reject(new Error('A short-answer question is required for this save operation.'));
+  }
+
+  const previousSave = questionRowSaveQueues.get(saveKey) || Promise.resolve();
+  const operation = previousSave.then(async () => {
+    const remoteId = questionIdAliases.get(saveKey) || (isUuid(question.id) ? question.id : null);
+    const payload = {
+      text: question.text,
+      choices: [],
+      correct: 0,
+      marks: question.marks,
+      type: 'short-answer',
+      answer: question.answer || '',
+      reference_answer: question.referenceAnswer || '',
+      metadata_updated_at: question.metadataUpdatedAt || new Date().toISOString()
+    };
+    let result = remoteId
+      ? await withTimeout(
+        supabase.from('questions').update(payload).eq('id', remoteId).select('id').maybeSingle(),
+        'Short-answer question save'
+      )
+      : await withTimeout(
+        supabase.from('questions').insert(payload).select('id').maybeSingle(),
+        'Short-answer question save'
+      );
+    if (result.error) throw result.error;
+    if (!result.data?.id && remoteId) {
+      result = await withTimeout(
+        supabase.from('questions').insert(payload).select('id').maybeSingle(),
+        'Short-answer question recovery'
+      );
+      if (result.error) throw result.error;
+    }
+    if (!result.data?.id) {
+      throw new Error('Supabase did not confirm the short-answer question row.');
+    }
+    questionIdAliases.set(saveKey, result.data.id);
+    return result.data.id;
+  });
+  const settledOperation = operation.then(() => undefined, () => undefined);
+  questionRowSaveQueues.set(saveKey, settledOperation);
+  void settledOperation.then(() => {
+    if (questionRowSaveQueues.get(saveKey) === settledOperation) {
+      questionRowSaveQueues.delete(saveKey);
     }
   });
   return operation;
@@ -703,7 +687,7 @@ export function persistMultipleChoiceQuestionToSupabase(question, localId) {
 
 export function deleteQuestionFromSupabase(questionId, saveKey, totalQuestions, activityItem) {
   if (!questionId) return Promise.reject(new Error('The question has no deletion identifier.'));
-  const pendingSave = multipleChoiceSaveQueues.get(saveKey) || Promise.resolve();
+  const pendingSave = questionRowSaveQueues.get(saveKey) || Promise.resolve();
   const operation = syncQueue.then(async () => {
     await pendingSave;
     const remoteId = questionIdAliases.get(saveKey) || questionId;
@@ -876,7 +860,16 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
     const savedIds = new Set();
     let questionSyncFailed = false;
     for (const question of state.questions) {
-      const payload = { text: question.text, choices: question.choices, correct: question.correct, marks: question.marks };
+      const payload = {
+        text: question.text,
+        choices: question.choices || [],
+        correct: question.correct,
+        marks: question.marks,
+        type: question.type === 'short-answer' ? 'short-answer' : 'multiple-choice',
+        answer: question.type === 'short-answer' ? question.answer || '' : '',
+        reference_answer: question.type === 'short-answer' ? question.referenceAnswer || '' : '',
+        metadata_updated_at: question.metadataUpdatedAt || new Date().toISOString()
+      };
       let result;
       for (let attempt = 0; attempt < 3; attempt++) {
         result = isUuid(question.id)

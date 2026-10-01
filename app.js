@@ -1,7 +1,7 @@
 function courseDisplayValue(value) { const normalized = String(value || '').trim(); return normalized === '34' || normalized.toLowerCase() === 'course' ? '' : normalized; }
 function studentCourseDetails() { const courseName = courseDisplayValue(state.config.courseName); const courseCode = courseDisplayValue(state.config.courseCode); return courseName || courseCode ? `<div class="course-banner">${courseName ? `<strong>${esc(courseName)}</strong>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''; }
 import { supabase } from './supabase.js';
-import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, hydrateQuizState, loadStudentQuizResult, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuestionToSupabase, persistQuizState, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt } from './supabaseStore.js';
+import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, hydrateQuizState, loadStudentQuizResult, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt } from './supabaseStore.js';
 import { loadLiveStudentUsernames, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { shortAnswerMatchScore } from './shortAnswerMatching.js';
 
@@ -313,8 +313,8 @@ function clearStudentSession(username) { delete state.studentSessions[username];
 function esc(value = '') { return String(value).replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[char])); }
 function formatDate(value) { if (!value) return 'Not scheduled'; return new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }); }
 function toDateTimeLocal(value) { if (!value) return ''; const date = new Date(value); if (Number.isNaN(date.getTime())) return ''; const pad = number => String(number).padStart(2, '0'); return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`; }
-function normalizeQuestion(row) { return { id: row.id, text: row.text, type: row.type === 'short-answer' ? 'short-answer' : 'multiple-choice', answer: String(row.answer || ''), choices: Array.isArray(row.choices) ? row.choices : [], correct: Number(row.correct) || 0, marks: Number(row.marks) || 1 }; }
-function restoreQuestionMetadata(questions, savedQuestions) { const savedById = new Map(savedQuestions.map(question => [question.id, question])); return questions.map(question => { const savedQuestion = savedById.get(question.id); return savedQuestion ? { ...question, ...savedQuestion, id: question.id } : question; }); }
+function normalizeQuestion(row) { return { id: row.id, text: row.text, type: row.type === 'short-answer' ? 'short-answer' : 'multiple-choice', answer: String(row.answer || ''), referenceAnswer: String(row.reference_answer || ''), metadataUpdatedAt: row.metadata_updated_at || '', choices: Array.isArray(row.choices) ? row.choices : [], correct: Number(row.correct) || 0, marks: Number(row.marks) || 1 }; }
+function restoreQuestionMetadata(questions, savedQuestions) { const savedById = new Map(savedQuestions.map(question => [question.id, question])); return questions.map(question => { const savedQuestion = savedById.get(question.id); if (!savedQuestion) return question; const rowVersion = Date.parse(question.metadataUpdatedAt || '') || 0; const metadataVersion = Date.parse(savedQuestion.metadataUpdatedAt || '') || 0; const metadataIsNewer = metadataVersion > rowVersion || (!rowVersion && !metadataVersion && savedQuestion.type === 'short-answer'); return metadataIsNewer ? { ...question, ...savedQuestion, id: question.id } : { ...savedQuestion, ...question, id: question.id }; }); }
 function shuffleQuestions(questions, seed = '') { const shuffled = [...questions]; let hash = 2166136261; for (const character of `${seed}:${state.currentQuizId || ''}`) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619); for (let index = shuffled.length - 1; index > 0; index--) { hash = Math.imul(hash ^ (hash >>> 13), 16777619); const swapIndex = (hash >>> 0) % (index + 1); [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]]; } return shuffled; }
 function quizIsLocked() { return Boolean(state.publishConfirmationPending || (state.questionsPublished && !state.quizStopped && !quizHasEnded())); }
 function quizHasEnded() { return Boolean(state.config.end && Date.now() >= new Date(state.config.end).getTime()); }
@@ -1097,7 +1097,7 @@ function saveQuestionLocally(question) {
 async function syncQuestionInBackground(localId, version, questionNumber, questionSnapshot) {
   try {
     const savedId = questionSnapshot.type === 'short-answer'
-      ? await persistQuestionToSupabase(state, localId)
+      ? await persistShortAnswerQuestionToSupabase(questionSnapshot, localId)
       : await persistMultipleChoiceQuestionToSupabase(questionSnapshot, localId);
     const question = state.questions.find(item => item.localId === localId || item.id === localId);
     if (!question) return;
@@ -1607,23 +1607,6 @@ questionsView = function questionBankWithShortAnswers() {
   const shortAnswerForm = `<section class="short-answer-section"><div class="short-answer-heading"><h3>${editingShortAnswer ? 'Edit short answer question' : 'Short answer question'}</h3><p class="subtle">Expected concepts are used for marking; the reference answer is for teacher use only.</p></div><form id="short-answer-form"><input type="hidden" name="shortId" value="${editingShortAnswer ? esc(questionBeingEdited.id) : ''}" /><div class="field"><label>Question prompt</label><textarea name="shortText" placeholder="Write the question students will see..." required ${disabled}>${editingShortAnswer ? esc(questionBeingEdited.text) : ''}</textarea></div><div class="field" style="margin-top:15px"><label>Answer</label><textarea name="referenceAnswer" placeholder="Teacher reference answer (not used for marking or shown to students)" ${disabled}>${editingShortAnswer ? esc(questionBeingEdited.referenceAnswer || '') : ''}</textarea></div><div class="form-grid short-answer-form-grid" style="margin-top:15px"><div class="field"><label>Expected concepts</label><input name="expectedAnswer" placeholder="Concepts and accepted terms used for marking" value="${editingShortAnswer ? esc(questionBeingEdited.answer || '') : ''}" required ${disabled} /><small class="subtle">This is used to mark student responses and is not shown to students.</small></div><div class="field"><label>Marks</label><input name="shortMarks" type="number" min="1" value="${editingShortAnswer ? Number(questionBeingEdited.marks) || 1 : ''}" required ${disabled} /></div></div><div style="display:flex;gap:9px;margin-top:18px"><button class="btn btn-primary" ${disabled}>${editingShortAnswer ? 'Update short answer' : 'Save short answer'}</button>${editingShortAnswer ? '<button type="button" class="btn btn-secondary" data-action="cancel-edit">Cancel</button>' : ''}</div></form></section>`;
   return markup.replace('</form></div><div class="card panel">', `</form>${shortAnswerForm}</div><div class="card panel">`);
 };
-
-async function confirmShortAnswerQuestionSaved(question) {
-  const { data, error } = await supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle();
-  if (error) throw error;
-
-  const snapshot = data?.data?.currentQuizQuestions;
-  const savedQuestion = snapshot?.quizId === state.currentQuizId && Array.isArray(snapshot.questions)
-    ? snapshot.questions.find(item => item.id === question.id)
-    : null;
-  if (savedQuestion?.type !== 'short-answer'
-    || savedQuestion.text !== question.text
-    || savedQuestion.answer !== question.answer
-    || String(savedQuestion.referenceAnswer || '') !== String(question.referenceAnswer || '')
-    || Number(savedQuestion.marks) !== Number(question.marks)) {
-    throw new Error('Supabase did not confirm this short-answer question in the question bank.');
-  }
-}
 
 function saveShortAnswerQuestion(event) {
   event.preventDefault();
