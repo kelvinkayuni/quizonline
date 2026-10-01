@@ -533,7 +533,7 @@ export function shortAnswerMatchScore(expectedAnswer, studentResponse) {
 
   const similarity = totalExpected ? totalMatched / totalExpected : 0;
   if (similarity === 1) return 1;
-  return similarity >= 0.8 ? 0.5 : 0;
+  return similarity >= 0.5 ? 0.5 : 0;
 }
 
 export function shortAnswerMatches(expectedAnswer, studentResponse) {
