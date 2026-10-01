@@ -24,6 +24,7 @@ An internet connection is needed for Supabase, Google Fonts, and the SheetJS CDN
 - Reusable multiple-choice and short-answer questions with per-question marks.
 - Teacher-only question-corrections PDF downloads with answer keys from the saved question bank.
 - Short-answer questions keep expected concepts for marking separate from an optional teacher reference answer.
+- Short-answer matching normalizes common gemology answer variants, including weight/size/toughness terms, chipping/breaking, and resistance synonyms; selected connector words are ignored between concepts.
 - Student quiz flow with one question at a time, submit-gated feedback, timer, automatic submission, and no retakes after completion.
 - Before starting a published quiz, student sign-in checks Supabase for a result matching that exact username and quiz ID; the database claim function repeats this check atomically to prevent a sign-in race. Completion inserts the result once and deletes the active attempt in the same database transaction. A result already stored for that username and quiz ID is returned unchanged, and later updates are rejected.
 - Questions, quiz configuration, imported student accounts, and completed attempts synchronize with Supabase. Active student quiz progress is saved in a dedicated Supabase table so it can resume on another device; browser login sessions remain browser-local.

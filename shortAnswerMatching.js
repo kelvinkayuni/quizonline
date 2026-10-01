@@ -51,6 +51,12 @@ const synonymGroups = [
   ['booking', 'reservation'],
   ['carat', 'weight'],
   ['clarity', 'purity'],
+  ['heavy', 'heavier'],
+  ['low', 'lower'],
+  ['tough', 'tougher', 'more_tough'],
+  ['breaking', 'chipping'],
+  ['withstand', 'endure', 'resist', 'tolerate', 'survive', 'bear', 'sustain'],
+  ['brittle', 'less_tough', 'more_brittle'],
   ['appraisal', 'valuation'],
   ['authenticity', 'provenance'],
   ['simulant', 'imitation'],
@@ -125,7 +131,7 @@ const synonymGroups = [
   ['petrol', 'gas'],
   ['bonnet', 'hood'],
   ['boot', 'trunk'],
-  ['big', 'large'],
+  ['high', 'higher', 'large', 'larger', 'big'],
   ['buy', 'purchase'],
   ['doctor', 'physician'],
   ['gem', 'gemstone'],
@@ -175,6 +181,7 @@ const stopWords = new Set([
   'her', 'our', 'your', 'my', 'me', 'you', 'we', 'they', 'he', 'she',
   'i', 'us', 'them', 'him'
 ]);
+const ignorableBetweenWords = new Set(['is', 'more', 'prone', 'less']);
 const auxiliaryVerbs = new Set([
   'be', 'am', 'is', 'are', 'was', 'were', 'been', 'being',
   'do', 'does', 'did', 'have', 'has', 'had'
@@ -191,6 +198,11 @@ const tensNumbers = new Map([
   ['sixty', 60], ['seventy', 70], ['eighty', 80], ['ninety', 90]
 ]);
 const compoundPhrases = [
+  { words: ['more', 'tough'], value: 'more_tough' },
+  { words: ['less', 'tough'], value: 'less_tough' },
+  { words: ['more', 'brittle'], value: 'more_brittle' },
+  { words: ['light', 'weight', 'stone'], value: 'light_stone' },
+  { words: ['light', 'stone'], value: 'light_stone' },
   { words: ['data', 'base'], value: 'database' },
   { words: ['high', 'school'], value: 'highschool' },
   { words: ['ice', 'cream'], value: 'icecream' },
@@ -425,9 +437,16 @@ function normalizeAnswerTokens(value) {
   const normalized = [];
   let negated = false;
 
-  for (const word of tokens) {
+  for (let index = 0; index < tokens.length; index++) {
+    const word = tokens[index];
     if (negationWords.has(word)) {
       negated = true;
+      continue;
+    }
+    const isConnectorBetweenWords = index > 0
+      && index < tokens.length - 1
+      && (ignorableBetweenWords.has(word) || (word === 'to' && tokens[index - 1] === 'prone'));
+    if (isConnectorBetweenWords) {
       continue;
     }
 
