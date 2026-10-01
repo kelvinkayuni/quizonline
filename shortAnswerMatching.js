@@ -377,6 +377,7 @@ function replacePhrases(tokens) {
 }
 
 function normalizeSpelling(word) {
+  if (word === 'more') return word;
   return spellingVariants.get(word) || word
     .replace(/our$/, 'or')
     .replace(/re$/, 'er')
@@ -469,7 +470,7 @@ function normalizeAnswerTokens(value) {
     negated = false;
   }
 
-  return normalized.length ? normalized : tokens;
+  return normalized.length ? [...new Set(normalized)] : tokens;
 }
 
 function orderedPhraseMatch(expected, response) {
@@ -514,9 +515,15 @@ function overlapCount(expected, response) {
 }
 
 function expectedGroups(expectedAnswer) {
-  return String(expectedAnswer || '').split(';').map(group =>
-    group.split('/').map(normalizeAnswerTokens).filter(words => words.length)
-  ).filter(alternatives => alternatives.length);
+  const previouslyExpected = new Set();
+  return String(expectedAnswer || '').split(';').map(group => {
+    const alternatives = group.split('/').map(normalizeAnswerTokens).filter(words => words.length);
+    const uniqueAlternatives = alternatives
+      .map(words => words.filter(word => !previouslyExpected.has(word)))
+      .filter(words => words.length);
+    alternatives.flat().forEach(word => previouslyExpected.add(word));
+    return uniqueAlternatives;
+  }).filter(alternatives => alternatives.length);
 }
 
 export function shortAnswerMatchScore(expectedAnswer, studentResponse) {
