@@ -134,7 +134,7 @@ const synonymGroups = [
   ['high', 'higher', 'large', 'larger', 'big'],
   ['buy', 'purchase'],
   ['doctor', 'physician'],
-  ['gem', 'gemstone'],
+  ['gem', 'gemstone', 'stone'],
   ['make', 'produce'],
   ['beauty', 'beautiful']
 ];
