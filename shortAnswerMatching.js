@@ -198,6 +198,14 @@ const tensNumbers = new Map([
   ['sixty', 60], ['seventy', 70], ['eighty', 80], ['ninety', 90]
 ]);
 const compoundPhrases = [
+  { words: ['high', 'specific', 'gravity'], value: 'high_density' },
+  { words: ['lower', 'specific', 'gravity'], value: 'low_density' },
+  { words: ['low', 'specific', 'gravity'], value: 'low_density' },
+  { words: ['lower', 'density'], value: 'low_density' },
+  { words: ['low', 'density'], value: 'low_density' },
+  { words: ['less', 'dense'], value: 'low_density' },
+  { words: ['high', 'density'], value: 'high_density' },
+  { words: ['dense'], value: 'high_density' },
   { words: ['more', 'tough'], value: 'more_tough' },
   { words: ['less', 'tough'], value: 'less_tough' },
   { words: ['more', 'brittle'], value: 'more_brittle' },
