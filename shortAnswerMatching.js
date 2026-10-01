@@ -209,8 +209,8 @@ const compoundPhrases = [
   { words: ['more', 'tough'], value: 'more_tough' },
   { words: ['less', 'tough'], value: 'less_tough' },
   { words: ['more', 'brittle'], value: 'more_brittle' },
-  { words: ['light', 'weight', 'stone'], value: 'light_stone' },
-  { words: ['light', 'stone'], value: 'light_stone' },
+  { words: ['light', 'weight', 'stone'], value: 'low_density' },
+  { words: ['light', 'stone'], value: 'low_density' },
   { words: ['data', 'base'], value: 'database' },
   { words: ['high', 'school'], value: 'highschool' },
   { words: ['ice', 'cream'], value: 'icecream' },
@@ -387,6 +387,16 @@ function normalizeSpelling(word) {
     .replace(/ll(?=(?:ed|ing|er|or|ation)$)/, 'l');
 }
 
+function canonicalizeWord(word) {
+  const directSynonym = synonyms.get(word);
+  if (directSynonym) return directSynonym;
+  const normalized = normalizeSpelling(word);
+  const normalizedSynonym = synonyms.get(normalized);
+  if (normalizedSynonym) return normalizedSynonym;
+  const root = normalizeSpelling(rootWord(normalized));
+  return synonyms.get(root) || root;
+}
+
 function rootWord(word) {
   const normalized = normalizeSpelling(word);
   if (irregularRoots.has(normalized)) return irregularRoots.get(normalized);
@@ -426,18 +436,10 @@ function rootWord(word) {
 }
 
 function canonicalizeTokens(tokens) {
-  const numbered = normalizeNumberWords(tokens);
-  const phrasesReplaced = replacePhrases(numbered);
-  const compoundsReplaced = replacePhrases(phrasesReplaced);
-  return compoundsReplaced.map(word => {
-    const directSynonym = synonyms.get(word);
-    if (directSynonym) return directSynonym;
-    const normalized = normalizeSpelling(word);
-    const normalizedSynonym = synonyms.get(normalized);
-    if (normalizedSynonym) return normalizedSynonym;
-    const root = normalizeSpelling(rootWord(normalized));
-    return synonyms.get(root) || root;
-  });
+  const numberedTokens = normalizeNumberWords(tokens);
+  const originalPhrasesReplaced = replacePhrases(numberedTokens);
+  const lexicalTokens = originalPhrasesReplaced.map(canonicalizeWord);
+  return replacePhrases(lexicalTokens);
 }
 
 function normalizeAnswerTokens(value) {
