@@ -1896,8 +1896,8 @@ submitAnswer = function submitTypedOrMultipleChoiceAnswer() {
   if (!response) return;
   const credit = shortAnswerMatchScore(question.answer, response);
   const correct = credit === 1;
-  const partial = credit === 0.5;
   const marksAwarded = Math.round((Number(question.marks) || 1) * credit);
+  const partial = !correct && marksAwarded > 0;
   session.feedback = { correct, partial, marksAwarded };
   session.answers.push({ questionId: question.id, selected: response, correct, partial, marksAwarded });
   saveSubmittedStudentAnswer();
