@@ -21,6 +21,33 @@ function withTimeout(request, operation) {
 }
 
 function attemptDataFromSession(studentSession) {
+  const answers = Array.isArray(studentSession.answers) ? studentSession.answers : [];
+  const answersById = Object.fromEntries(answers.map(answer => [answer.questionId, answer]));
+  const questionDetails = (studentSession.questionOrder || []).flatMap((question, index) => {
+    const answer = answersById[question.id];
+    if (!answer) return [];
+    const marksPossible = Math.round(Number(question.marks) || 0);
+    const savedMarks = Number(answer.marksAwarded);
+    const marksAwarded = Number.isFinite(savedMarks)
+      ? Math.round(Math.min(marksPossible, Math.max(0, savedMarks)))
+      : answer.correct ? marksPossible : 0;
+    const selectedIndex = answer.selected == null ? NaN : Number(answer.selected);
+    const studentAnswer = question.type === 'short-answer'
+      ? String(answer.selected || '')
+      : Number.isInteger(selectedIndex)
+        ? String(question.choices?.[selectedIndex] || '')
+        : '';
+    return [{
+      questionId: String(question.id),
+      questionNumber: index + 1,
+      questionText: String(question.text || ''),
+      questionType: question.type === 'short-answer' ? 'short-answer' : 'multiple-choice',
+      studentAnswer: studentAnswer || 'Not answered',
+      submitted: true,
+      marksAwarded,
+      marksPossible
+    }];
+  });
   return {
     questionOrderIds: (studentSession.questionOrder || []).map(question => question.id),
     index: Number(studentSession.index) || 0,
@@ -30,7 +57,8 @@ function attemptDataFromSession(studentSession) {
     remaining: Number(studentSession.remaining) || 0,
     deadlineAt: studentSession.deadlineAt || null,
     started: Boolean(studentSession.started),
-    answers: Array.isArray(studentSession.answers) ? studentSession.answers : [],
+    answers,
+    questionDetails,
     updatedAt: studentSession.updatedAt || new Date().toISOString()
   };
 }
@@ -277,7 +305,8 @@ export async function persistStudentQuizResult(result, studentSession) {
         score: result.score,
         totalMarks: result.totalMarks,
         percentage: result.percentage,
-        completedAt: result.completedAt
+        completedAt: result.completedAt,
+        questionDetails: result.questionDetails || []
       }
     }),
     'Completed quiz result save'
@@ -298,6 +327,25 @@ export async function persistStudentQuizResult(result, studentSession) {
     total_marks: data.result.total_marks ?? data.result.totalMarks,
     completed_at: data.result.completed_at ?? data.result.completedAt
   });
+}
+
+export async function loadStudentQuizReport(username, password, quizId) {
+  if (!username || !password || !quizId) {
+    throw new Error('Student credentials and a quiz selection are required to download this report.');
+  }
+  const { data, error } = await withTimeout(
+    supabase.rpc('load_student_quiz_report', {
+      p_quiz_id: String(quizId),
+      p_username: username,
+      p_password: password
+    }),
+    'Student detailed report download'
+  );
+  if (error) throw error;
+  if (!Array.isArray(data?.question_details) || !data.question_details.length) {
+    throw new Error('Supabase did not return a detailed report for this quiz.');
+  }
+  return data;
 }
 
 export async function publishQuizAtomically(state, quizId) {

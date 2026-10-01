@@ -1,7 +1,7 @@
 function courseDisplayValue(value) { const normalized = String(value || '').trim(); return normalized === '34' || normalized.toLowerCase() === 'course' ? '' : normalized; }
 function studentCourseDetails() { const courseName = courseDisplayValue(state.config.courseName); const courseCode = courseDisplayValue(state.config.courseCode); return courseName || courseCode ? `<div class="course-banner">${courseName ? `<strong>${esc(courseName)}</strong>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''; }
 import { supabase } from './supabase.js';
-import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, hydrateQuizState, loadStudentQuizResult, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt } from './supabaseStore.js';
+import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, hydrateQuizState, loadStudentQuizReport, loadStudentQuizResult, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt } from './supabaseStore.js';
 import { loadLiveStudentUsernames, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { shortAnswerMatchScore } from './shortAnswerMatching.js';
 
@@ -253,6 +253,13 @@ function saveStudentSession(options = {}) {
   studentAttemptSaveTimer = setTimeout(() => {
     void syncStudentAttempt(targetSession).catch(error => reportStudentAttemptSaveError(targetSession, error));
   }, options.immediate ? 0 : 400);
+}
+
+function saveSubmittedStudentAnswer() {
+  saveStudentSession({ localOnly: true });
+  const targetSession = session;
+  if (targetSession?.attemptGeneration == null || !targetSession.attemptOwnerToken) return;
+  void syncStudentAttempt(targetSession).catch(error => reportStudentAttemptSaveError(targetSession, error));
 }
 
 function syncStudentAttempt(targetSession) {
@@ -587,7 +594,7 @@ async function startStudentQuiz() {
 function studentAccountWithoutQuiz() { const history = state.studentHistory.filter(item => item.username === session.username); return `<main class="main"><div class="quiz-shell"><div class="quiz-top"><div><div class="brand"><span class="brand-mark">OQ</span><strong>ONLINE QUIZ</strong></div><p class="subtle" style="margin:14px 0 0">${esc(session.username)} · Student account</p></div><div class="student-actions"><button class="btn btn-secondary btn-small" data-action="logout">Sign out</button><button class="btn btn-secondary btn-small" data-action="view-student-history">View quiz history</button><button class="btn btn-secondary btn-small" data-action="download-student-history" ${history.length ? '' : 'disabled'}>Download history</button></div></div><section class="card result-hero"><div class="eyebrow kicker">No active assessment</div><h2>Your student account is ready.</h2><p class="subtle">There is no quiz available right now. You can still review your previous quiz history below.</p>${studentSchedule()}</section><section class="card panel student-history-panel" id="student-history-panel"><div class="panel-head"><div><h2>Quiz history</h2><p class="subtle">Your records can be viewed or downloaded, but not deleted.</p></div></div>${studentHistoryTable(history)}</section></div></main>`; }
 function studentSchedule() { const config = state.config; const courseName = courseDisplayValue(config.courseName); const courseCode = courseDisplayValue(config.courseCode); return `${courseName || courseCode ? `<div style="margin:24px 0 0;text-align:left">${courseName ? `<h3 style="margin:7px 0 0">${esc(courseName)}</h3>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''}<div class="grid" style="grid-template-columns:repeat(3,1fr);gap:12px;margin:24px 0 0;text-align:left"><div><div class="eyebrow">Starts</div><strong style="display:block;margin-top:7px">${config.start ? esc(formatDate(config.start)) : 'Not scheduled'}</strong></div><div><div class="eyebrow">Ends</div><strong style="display:block;margin-top:7px">${config.end ? esc(formatDate(config.end)) : 'No deadline'}</strong></div><div><div class="eyebrow">Time limit</div><strong style="display:block;margin-top:7px">${config.duration ? `${config.duration} minutes` : 'Not set'}</strong></div></div>`; }
 function studentResult() { const result = session.result || state.results.find(item => item.username === session.username); const history = state.studentHistory.filter(item => item.username === session.username); const percentage = result?.percentage ?? 0; const passed = percentage >= 50; const pending = Boolean(session.resultSyncPending); return `<main class="main"><div class="quiz-shell"><div class="quiz-top"><div class="brand"><span class="brand-mark">OQ</span><strong>ONLINE QUIZ</strong></div><div class="student-actions"><button class="btn btn-secondary btn-small" data-action="view-student-history">View student history</button><button class="btn btn-secondary btn-small" data-action="download-student-history" ${history.length ? '' : 'disabled'}>Download history</button>${pending ? '' : '<button class="btn btn-secondary btn-small" data-action="logout">Sign out</button>'}</div></div><section class="card result-hero"><div class="eyebrow kicker">${pending ? 'Submission not confirmed' : 'Assessment complete'}</div><div class="score-big">${percentage}%</div><h2>${passed ? 'WELL DONE' : 'NOT GOOD'}, ${esc(session.username)}.</h2><p class="subtle">${pending ? `Supabase has not confirmed this result yet. Keep this page open and retry the save; do not start this quiz again on another device until confirmation. ${esc(session.resultSyncError || '')}` : 'Your answers have been recorded. This attempt is final and cannot be retaken.'}</p>${pending ? '<button class="btn btn-primary" data-action="retry-result-save">Retry result save</button>' : ''}<div class="grid" style="grid-template-columns:repeat(3,1fr);margin:30px 0;text-align:left"><div><div class="eyebrow">Score</div><strong>${result ? result.score : 0}/${result ? result.totalMarks : 0}</strong></div><div><div class="eyebrow">Attempted</div><strong>${result ? result.attempted : 0}</strong></div><div><div class="eyebrow">Incorrect</div><strong>${result ? result.incorrect : 0}</strong></div></div></section><section class="card panel student-history-panel" id="student-history-panel"><div class="panel-head"><div><h2>Quiz history</h2><p class="subtle">Your records can be viewed or downloaded, but not deleted.</p></div></div>${studentHistoryTable(history)}</section></div></main>`; }
-function studentHistoryTable(history) { if (!history.length) return '<div class="empty">No completed quiz history yet.</div>'; return `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Duration</th><th>Attempted</th><th>Right</th><th>Wrong</th><th>Marks scored</th></tr></thead><tbody>${history.map(item => `<tr><td>${formatDate(item.completedAt)}</td><td>${item.durationMinutes || 0} min</td><td>${item.attempted}</td><td>${item.correct ?? Math.max(0, item.attempted - item.incorrect)}</td><td>${item.incorrect}</td><td><strong>${item.score}/${item.totalMarks}</strong></td></tr>`).join('')}</tbody></table></div>`; }
+function studentHistoryTable(history) { if (!history.length) return '<div class="empty">No completed quiz history yet.</div>'; return `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Quiz</th><th>Duration</th><th>Attempted</th><th>Right</th><th>Wrong</th><th>Marks scored</th><th>Report</th></tr></thead><tbody>${history.map(item => `<tr><td>${formatDate(item.completedAt)}</td><td>${esc(item.quizId || 'Not recorded')}</td><td>${item.durationMinutes || 0} min</td><td>${item.attempted}</td><td>${item.correct ?? Math.max(0, item.attempted - item.incorrect)}</td><td>${item.incorrect}</td><td><strong>${item.score}/${item.totalMarks}</strong></td><td><button class="btn btn-secondary btn-small" data-action="download-quiz-report" data-quiz-id="${esc(item.quizId || '')}" ${item.quizId ? '' : 'disabled'}>Download report</button></td></tr>`).join('')}</tbody></table></div>`; }
 function formatTime(totalSeconds) { const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0'); const seconds = Math.max(0, totalSeconds % 60).toString().padStart(2, '0'); return `${minutes}:${seconds}`; }
 function addActivity(text, type = 'book') { state.activity.unshift({ text, type, time: new Date().toISOString() }); state.activity = state.activity.slice(0, 20); saveState(); }
 async function persistQuizControlState() { if (state.questionsPublished && state.currentQuizId) return; const result = await supabase.from('quiz_config').upsert({ id: 1, course_name: state.config.courseName || null, course_code: state.config.courseCode || null, total_questions: state.config.totalQuestions, duration: state.config.duration, start_time: state.config.start ? new Date(state.config.start).toISOString() : null, end_time: state.config.end ? new Date(state.config.end).toISOString() : null, quiz_id: state.currentQuizId, published: state.questionsPublished, stopped: state.quizStopped }); if (result.error) throw result.error; }
@@ -837,6 +844,7 @@ function bindEvents() { applyBranding(); const totalQuestionsField = document.qu
   const openResult = document.querySelector('[data-action="open-result"]'); if (openResult) openResult.addEventListener('click', downloadResults);
   const viewHistory = document.querySelector('[data-action="view-student-history"]'); if (viewHistory) viewHistory.addEventListener('click', () => document.querySelector('#student-history-panel')?.scrollIntoView({ behavior: 'smooth' }));
   const downloadHistory = document.querySelector('[data-action="download-student-history"]'); if (downloadHistory) downloadHistory.addEventListener('click', downloadStudentHistory);
+  document.querySelectorAll('[data-action="download-quiz-report"]').forEach(button => button.addEventListener('click', () => { void downloadStudentQuizReport(button.dataset.quizId, button); }));
   const deleteResultFile = document.querySelector('[data-action="delete-result-file"]'); if (deleteResultFile) deleteResultFile.addEventListener('click', deleteSelectedResultFile);
   const clearResultFiles = document.querySelector('[data-action="clear-result-files"]'); if (clearResultFiles) clearResultFiles.addEventListener('click', clearResultFileHistory);
   const clearHealth = document.querySelector('[data-action="clear-health"]'); if (clearHealth) clearHealth.addEventListener('click', clearAssessmentHealth);
@@ -1368,6 +1376,71 @@ async function clearRecentActivity() {
 }
 function downloadResults() { if (!window.XLSX) return; const file = state.resultFiles.find(item => item.id === selectedResultFileId) || state.resultFiles[0]; const results = file?.rows || state.results; if (!results.length) return; const fileQuizId = file?.id?.startsWith('quiz-') ? file.id.slice(5) : ''; const rows = [['Quiz ID', 'Student username', 'Number of questions attempted', 'Number answered incorrectly', 'Total marks obtained', 'Percentage score'], ...results.map(result => [result.quizId || fileQuizId || 'Not recorded', result.username, result.attempted, result.incorrect, result.score, `${result.percentage}%`])]; const sheet = XLSX.utils.aoa_to_sheet(rows); const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, 'Results'); XLSX.writeFile(book, `${file?.name || 'online-quiz-results'}.xlsx`); showToast('Results workbook downloaded.'); }
 function downloadStudentHistory() { if (!window.XLSX || !session) return; const history = state.studentHistory.filter(item => item.username === session.username); if (!history.length) return; const rows = [['Date', 'Duration (minutes)', 'Questions attempted', 'Questions right', 'Questions wrong', 'Marks scored', 'Total marks'], ...history.map(item => [formatDate(item.completedAt), item.durationMinutes, item.attempted, item.correct, item.incorrect, item.score, item.totalMarks])]; const sheet = XLSX.utils.aoa_to_sheet(rows); const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, 'Quiz history'); XLSX.writeFile(book, `${session.username}-quiz-history.xlsx`); showToast('Your quiz history was downloaded.'); }
+async function downloadStudentQuizReport(quizId, button) {
+  if (session?.role !== 'student' || !quizId) return showToast('Select a completed quiz before downloading its report.', 'error');
+  const student = state.users.find(user => user.username === session.username);
+  if (!student?.password) return showToast('Your student login could not be verified. Please sign in again.', 'error');
+  if (button) button.disabled = true;
+  try {
+    const report = await loadStudentQuizReport(session.username, student.password, quizId);
+    const { jsPDF } = await import('jspdf');
+    const pdf = new jsPDF({ format: 'a4', unit: 'mm' });
+    const margin = 18;
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const contentWidth = pageWidth - margin * 2;
+    const bottom = pageHeight - margin;
+    let y = margin;
+    const ensureSpace = height => {
+      if (y + height <= bottom) return;
+      pdf.addPage();
+      y = margin;
+    };
+    const addText = (text, options = {}) => {
+      const fontSize = options.fontSize || 10;
+      const lineHeight = options.lineHeight || 5;
+      pdf.setFont('helvetica', options.bold ? 'bold' : 'normal');
+      pdf.setFontSize(fontSize);
+      pdf.setTextColor(32, 37, 43);
+      const lines = pdf.splitTextToSize(String(text), contentWidth);
+      lines.forEach(line => {
+        ensureSpace(lineHeight);
+        pdf.text(line, margin, y);
+        y += lineHeight;
+      });
+    };
+    pdf.setProperties({ title: `Quiz ${report.quiz_id} detailed result`, subject: 'Student quiz answers and marks' });
+    addText('Detailed quiz result', { fontSize: 20, lineHeight: 9, bold: true });
+    addText(`Student: ${report.username}`);
+    addText(`Quiz: ${report.quiz_id}`);
+    addText(`Completed: ${formatDate(report.completed_at)}`);
+    addText(`Overall score: ${report.score}/${report.total_marks} (${report.percentage}%)`, { bold: true });
+    pdf.setDrawColor(23, 107, 99);
+    pdf.setLineWidth(0.7);
+    pdf.line(margin, y + 1, pageWidth - margin, y + 1);
+    y += 8;
+    report.question_details.forEach(question => {
+      ensureSpace(17);
+      addText(`${question.questionNumber}. ${question.questionText}`, { fontSize: 12, lineHeight: 5.5, bold: true });
+      addText(`Your answer: ${question.studentAnswer || 'Not answered'}`);
+      addText(`Marks: ${question.marksAwarded}/${question.marksPossible}`);
+      y += 3;
+    });
+    const fileSafeQuizId = String(report.quiz_id).replace(/[^a-z0-9_-]/gi, '-');
+    const fileSafeUsername = String(report.username).replace(/[^a-z0-9_-]/gi, '-');
+    pdf.save(`${fileSafeUsername}-quiz-${fileSafeQuizId}-detailed-result.pdf`);
+    showToast('Your detailed quiz report was downloaded.');
+  } catch (error) {
+    const message = String(error?.message || error);
+    if (message.includes('not available for this older quiz attempt')) {
+      showToast('A detailed report is not available for this older quiz attempt.', 'error');
+    } else {
+      showToast(`The detailed quiz report could not be downloaded: ${message}`, 'error');
+    }
+  } finally {
+    if (button?.isConnected) button.disabled = false;
+  }
+}
 function startTimer() {
   stopTimer();
   timerId = setInterval(() => {
@@ -1405,7 +1478,7 @@ function startTimer() {
   }, 1000);
 }
 function stopTimer() { if (timerId) clearInterval(timerId); timerId = null; }
-function submitAnswer() { if (state.quizStopped || quizHasEnded() || session.quizId !== state.currentQuizId) return showToast('This quiz is no longer active.'); const orderedQuestions = session.questionOrder || state.questions; const question = orderedQuestions[session.index]; session.feedback = { correct: session.selected === question.correct }; session.answers.push({ questionId: question.id, selected: session.selected, correct: session.feedback.correct }); saveStudentSession(); app(); }
+function submitAnswer() { if (state.quizStopped || quizHasEnded() || session.quizId !== state.currentQuizId) return showToast('This quiz is no longer active.'); const orderedQuestions = session.questionOrder || state.questions; const question = orderedQuestions[session.index]; session.feedback = { correct: session.selected === question.correct }; session.answers.push({ questionId: question.id, selected: session.selected, correct: session.feedback.correct }); saveSubmittedStudentAnswer(); app(); }
 function nextQuestion() { if (state.quizStopped || quizHasEnded() || session.quizId !== state.currentQuizId) return showToast('This quiz is no longer active.'); const orderedQuestions = session.questionOrder || state.questions; if (session.index >= Math.min(state.config.totalQuestions, orderedQuestions.length) - 1) return finishQuiz(false); session.index += 1; session.selected = null; session.feedback = null; saveStudentSession(); app(); }
 function finalizeStudentResult(studentSession, autoSubmitted) {
   const orderedQuestions = studentSession.questionOrder || state.questions;
@@ -1432,10 +1505,35 @@ function finalizeStudentResult(studentSession, autoSubmitted) {
     else if (answer) incorrect++;
   });
 
+  const questionDetails = quizQuestions.map((question, index) => {
+    const answer = answersById[question.id];
+    const marksPossible = Math.round(Number(question.marks) || 0);
+    const savedMarks = Number(answer?.marksAwarded);
+    const marksAwarded = answer && Number.isFinite(savedMarks)
+      ? Math.round(Math.min(marksPossible, Math.max(0, savedMarks)))
+      : answer?.correct ? marksPossible : 0;
+    const selectedIndex = answer?.selected == null ? NaN : Number(answer.selected);
+    const studentAnswer = question.type === 'short-answer'
+      ? String(answer?.selected || '')
+      : Number.isInteger(selectedIndex)
+        ? String(question.choices?.[selectedIndex] || '')
+        : '';
+    return {
+      questionId: String(question.id),
+      questionNumber: index + 1,
+      questionText: question.text,
+      questionType: question.type === 'short-answer' ? 'short-answer' : 'multiple-choice',
+      studentAnswer: studentAnswer || 'Not answered',
+      submitted: Boolean(answer),
+      marksAwarded,
+      marksPossible
+    };
+  });
   const result = {
     username: studentSession.username,
     quizId: studentSession.quizId || state.currentQuizId,
     answers: studentSession.answers || [],
+    questionDetails,
     attempted: (studentSession.answers || []).length,
     correct,
     incorrect,
@@ -1649,7 +1747,7 @@ submitAnswer = function submitTypedOrMultipleChoiceAnswer() {
   const marksAwarded = Math.round((Number(question.marks) || 1) * credit);
   session.feedback = { correct, partial, marksAwarded };
   session.answers.push({ questionId: question.id, selected: response, correct, partial, marksAwarded });
-  saveStudentSession();
+  saveSubmittedStudentAnswer();
   app();
 };
 
