@@ -115,6 +115,11 @@ tr:last-child td { border: 0; }
 .login-box h2 { margin-top: 38px; font-size: 27px; }
 .login-box .subtle { margin-bottom: 27px; }
 .login-box form { display: grid; gap: 16px; }
+.password-field { position: relative; }
+.password-field input { padding-right: 44px; }
+.password-toggle { position: absolute; top: 50%; right: 8px; display: grid; width: 30px; height: 30px; place-items: center; padding: 5px; transform: translateY(-50%); border: 0; border-radius: 5px; color: var(--muted); background: transparent; cursor: pointer; }
+.password-toggle:hover, .password-toggle:focus-visible { color: var(--teal); background: rgba(23,107,99,.08); }
+.password-toggle svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.7; }
 .login-submit { width: 100%; margin-top: 10px; padding: 14px; }
 .hint { margin-top: 21px; padding: 11px 13px; border-left: 2px solid var(--yellow); color: var(--muted); background: #fbf8e9; font-size: 11px; line-height: 1.6; }
 .quiz-shell { max-width: 900px; margin: 0 auto; }
