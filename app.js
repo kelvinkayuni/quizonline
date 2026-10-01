@@ -364,7 +364,65 @@ function revokeStudentAccess() {
 function liveStudents() { const online = state.users.filter(user => user.status === 'online'); if (!online.length) return '<div class="empty">No students are currently taking the quiz.</div>'; return `<div class="activity">${online.map(user => `<div class="activity-item"><span class="activity-icon">${icon('pulse')}</span><div><strong>${esc(user.username)}</strong><br><span class="subtle">Currently answering</span></div><span class="status">Online</span></div>`).join('')}</div>`; }
 async function refreshLiveStudents() { if (!session || session.role !== 'teacher') return; if (!state.currentQuizId) { state.users = state.users.map(user => ({ ...user, status: 'offline' })); if (teacherView === 'overview' || teacherView === 'results') app(); return; } const liveUsernames = await loadLiveStudentUsernames(state.currentQuizId); if (!liveUsernames) return; const now = new Date().toISOString(); state.users = state.users.map(user => ({ ...user, status: liveUsernames.has(user.username) ? 'online' : 'offline', lastSeen: liveUsernames.has(user.username) ? user.lastSeen || now : user.lastSeen })); if (teacherView === 'overview' || teacherView === 'results') app(); }
 async function refreshTeacherQuizState() { if (!session || session.role !== 'teacher' || teacherMutationInFlight) return; const { data, error } = await supabase.from('quiz_config').select('quiz_id, published, stopped, total_questions, duration, start_time, end_time, course_name, course_code').eq('id', 1).maybeSingle(); if (error || !data) return; const nextQuizId = data.quiz_id || null; const nextStopped = Boolean(data.stopped); const nextPublished = Boolean(data.published) && !nextStopped; const nextConfig = { ...state.config, courseName: data.course_name || '', courseCode: data.course_code || '', totalQuestions: Number(data.total_questions) || 0, duration: Number(data.duration) || 0, start: toDateTimeLocal(data.start_time), end: toDateTimeLocal(data.end_time) }; const changed = state.currentQuizId !== nextQuizId || state.quizStopped !== nextStopped || state.questionsPublished !== nextPublished || state.config.totalQuestions !== nextConfig.totalQuestions || state.config.duration !== nextConfig.duration || state.config.start !== nextConfig.start || state.config.end !== nextConfig.end; if (!changed) return; state.currentQuizId = nextQuizId; state.quizStopped = nextStopped; state.questionsPublished = nextPublished; state.config = nextConfig; if (teacherView === 'questions' || teacherView === 'overview') app(); }
-async function refreshStudentQuizStateRaw() { if (!session || session.role !== 'student') return; const [configResult, questionsResult, workspaceResult] = await Promise.all([supabase.from('quiz_config').select('quiz_id, published, stopped, total_questions, duration, start_time, end_time, course_name, course_code').eq('id', 1).maybeSingle(), supabase.from('questions').select('*').order('created_at'), supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle()]); if (questionsResult.error) return; const config = configResult.data; const workspace = workspaceResult.data?.data || {}; const previousQuizId = state.currentQuizId; const previousStopped = state.quizStopped; const previousPublished = state.questionsPublished; const previousQuestionCount = state.questions.length; state.questions = questionsResult.data.map(normalizeQuestion); state.currentQuizId = config?.quiz_id || null; state.quizStopped = Boolean(config?.stopped); state.questionsPublished = Boolean(config?.published) && !state.quizStopped && state.questions.length > 0; state.config = { ...state.config, courseName: config?.course_name || workspace.courseName || state.config.courseName || '', courseCode: config?.course_code || workspace.courseCode || state.config.courseCode || '', totalQuestions: Number(config?.total_questions) || 0, duration: Number(config?.duration) || 0, start: toDateTimeLocal(config?.start_time), end: toDateTimeLocal(config?.end_time) }; const quizChanged = Boolean(state.currentQuizId && state.currentQuizId !== previousQuizId); const quizRemoved = Boolean(previousQuizId) && (!state.questionsPublished || state.quizStopped || !state.currentQuizId); const quizStateChanged = quizChanged || quizRemoved || state.quizStopped !== previousStopped || state.questionsPublished !== previousPublished || state.questions.length !== previousQuestionCount; if (quizStateChanged) { if (quizRemoved && previousQuizId) { state.results = state.results.filter(result => result.quizId !== previousQuizId); state.studentHistory = state.studentHistory.filter(result => result.quizId !== previousQuizId); state.resultFiles = state.resultFiles.filter(file => !file.id.includes(previousQuizId)); } stopTimer(); session.started = false; session.quizId = state.currentQuizId; session.completed = false; session.result = null; session.selected = null; session.feedback = null; session.index = 0; session.answers = []; session.questionOrder = null; saveStudentSession(); app(); if (state.questionsPublished && quizChanged) showToast('New quiz available. You can start now.'); } }
+async function refreshStudentQuizStateRaw() {
+  if (!session || session.role !== 'student') return;
+  const [configResult, questionsResult, workspaceResult] = await Promise.all([
+    supabase.from('quiz_config').select('quiz_id, published, stopped, total_questions, duration, start_time, end_time, course_name, course_code').eq('id', 1).maybeSingle(),
+    supabase.from('questions').select('*').order('created_at'),
+    supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle()
+  ]);
+  if (questionsResult.error) return;
+  const config = configResult.data;
+  const workspace = workspaceResult.data?.data || {};
+  const previousQuizId = state.currentQuizId;
+  const previousStopped = state.quizStopped;
+  const previousPublished = state.questionsPublished;
+  const previousQuestionCount = state.questions.length;
+  const previousHistoryCount = state.studentHistory.length;
+  const deletedQuizIds = new Set([
+    ...(state.deletedQuizIds || []),
+    ...(Array.isArray(workspace.deletedQuizIds) ? workspace.deletedQuizIds : [])
+  ]);
+  state.deletedQuizIds = [...deletedQuizIds];
+  state.results = state.results.filter(result => !result.quizId || !deletedQuizIds.has(result.quizId));
+  state.studentHistory = state.studentHistory.filter(result => !result.quizId || !deletedQuizIds.has(result.quizId));
+  const historyChanged = state.studentHistory.length !== previousHistoryCount;
+  state.resultFiles = state.resultFiles.filter(file => {
+    const quizId = file.id?.startsWith('quiz-') ? file.id.slice(5) : '';
+    return !quizId || !deletedQuizIds.has(quizId);
+  });
+  state.questions = questionsResult.data.map(normalizeQuestion);
+  state.currentQuizId = config?.quiz_id || null;
+  state.quizStopped = Boolean(config?.stopped);
+  state.questionsPublished = Boolean(config?.published) && !state.quizStopped && state.questions.length > 0;
+  state.config = {
+    ...state.config,
+    courseName: config?.course_name || workspace.courseName || state.config.courseName || '',
+    courseCode: config?.course_code || workspace.courseCode || state.config.courseCode || '',
+    totalQuestions: Number(config?.total_questions) || 0,
+    duration: Number(config?.duration) || 0,
+    start: toDateTimeLocal(config?.start_time),
+    end: toDateTimeLocal(config?.end_time)
+  };
+  const quizChanged = Boolean(state.currentQuizId && state.currentQuizId !== previousQuizId);
+  const quizRemoved = Boolean(previousQuizId) && (!state.questionsPublished || state.quizStopped || !state.currentQuizId);
+  const quizStateChanged = quizChanged || quizRemoved || state.quizStopped !== previousStopped || state.questionsPublished !== previousPublished || state.questions.length !== previousQuestionCount;
+  if (quizStateChanged) {
+    stopTimer();
+    session.started = false;
+    session.quizId = state.currentQuizId;
+    session.completed = false;
+    session.result = null;
+    session.selected = null;
+    session.feedback = null;
+    session.index = 0;
+    session.answers = [];
+    session.questionOrder = null;
+    saveStudentSession();
+    app();
+    if (state.questionsPublished && quizChanged) showToast('New quiz available. You can start now.');
+  } else if (historyChanged) app();
+}
 function activityList() { if (!state.activity.length) return '<div class="empty">No activity recorded yet. Your workspace will appear here as students participate.</div>'; return `<div class="activity">${state.activity.slice(0, 6).map(item => `<div class="activity-item"><span class="activity-icon">${icon(item.type || 'book')}</span><div>${esc(item.text)}<br><span class="subtle">${formatDate(item.time)}</span></div><span class="activity-time">${new Date(item.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></div>`).join('')}</div>`; }
 async function downloadCorrectionsPdf() {
   return downloadQuestionCorrectionsPdf(state.questions, state.config);
