@@ -134,6 +134,14 @@ tr:last-child td { border: 0; }
 .student-actions .timer { order: -2; text-align: center; }
 .assessment-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
 .student-history-panel { margin-top: 17px; text-align: left; }
+.quiz-question-history-list { gap: 0; }
+.quiz-question-history-item { grid-template-columns: minmax(0, 1fr) auto; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.quiz-question-history-item:last-child { border-bottom: 0; }
+.quiz-question-history-details { display: flex; min-width: 0; flex-wrap: wrap; align-items: baseline; gap: 5px 14px; }
+.quiz-question-history-details strong { overflow-wrap: anywhere; }
+.quiz-question-history-details .subtle { margin: 0; }
+.quiz-question-history-download { width: auto; justify-self: end; white-space: nowrap; }
+.quiz-question-history-item .btn { width: auto; }
 .timer { padding: 10px 13px; border: 1px solid #e7b5a7; border-radius: 7px; color: var(--coral); background: #fff5f1; font: 500 12px DM Mono, monospace; }
 .quiz-progress { height: 4px; margin-bottom: 42px; background: #e4e6df; }
 .quiz-progress span { display: block; height: 100%; background: var(--coral); }
@@ -156,3 +164,4 @@ tr:last-child td { border: 0; }
 .toast.show { opacity: 1; transform: translateY(0); }
 @media (max-width: 900px) { .shell { grid-template-columns: 1fr; } .sidebar { padding: 15px 16px; } .brand { padding: 0 3px 16px; } .nav-label, .sidebar-foot { display: none; } .nav { display: flex; overflow-x: auto; } .nav button { flex: 0 0 auto; } .main { padding: 25px 20px 40px; } .stat-grid { grid-template-columns: repeat(2, 1fr); } .two-col { grid-template-columns: 1fr; } }
 @media (max-width: 620px) { .login-page { grid-template-columns: 1fr; } .login-art { min-height: 290px; padding: 25px; } .art-copy { margin: auto 0 0; } .art-copy h1 { font-size: 45px; } .art-copy p, .art-note { display: none; } .login-side { padding: 28px 20px; } .topbar { align-items: flex-start; flex-direction: column; } .form-grid, .short-answer-form-grid { grid-template-columns: 1fr; } .field.full { grid-column: auto; } .panel { padding: 17px; } .quiz-top { align-items: flex-start; flex-direction: column; margin-bottom: 33px; } .quiz-card { padding: 22px; } .quiz-question { font-size: 23px; } }
+@media (max-width: 620px) { .quiz-question-history-item { grid-template-columns: minmax(0, 1fr) auto; gap: 10px; } .quiz-question-history-details { display: grid; gap: 4px; } }
