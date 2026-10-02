@@ -1420,7 +1420,7 @@ async function clearAllQuestions() {
     let syncError = null;
     try {
       await persistQuizControlState();
-      await persistQuizState(state, 'teacher', { waitForSync: true });
+      await persistQuizState(state, 'teacher', { waitForSync: true, deleteMissingQuestions: true });
     } catch (error) {
       syncError = error;
     }
