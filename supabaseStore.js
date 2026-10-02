@@ -401,6 +401,18 @@ export async function loadTeacherQuizQuestionHistory(quizId) {
   return data;
 }
 
+export async function deleteTeacherQuizQuestionHistory(quizId) {
+  if (!quizId) throw new Error('Select an archived quiz before deleting its question history.');
+  const { data, error } = await withTimeout(
+    supabase.rpc('delete_teacher_quiz_question_history', { p_quiz_id: String(quizId) }),
+    'Archived quiz question history deletion'
+  );
+  if (error) throw error;
+  if (data?.deleted !== true || data.quiz_id !== String(quizId)) {
+    throw new Error('Supabase did not confirm deletion of the selected archived question set.');
+  }
+}
+
 function sameQuestionRow(left, right) {
   return left.text === right.text
     && Number(left.correct) === Number(right.correct)
