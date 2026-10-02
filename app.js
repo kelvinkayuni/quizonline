@@ -213,10 +213,6 @@ let studentAttemptSaveTimer = null;
 let studentAttemptSaveQueue = Promise.resolve();
 let presenceWindowBound = false;
 const SESSION_KEY = 'online-quiz-window-session-v1';
-const TEACHER_LAST_ACTIVITY_KEY = 'online-quiz-teacher-last-activity-v1';
-const TEACHER_INACTIVITY_LIMIT_MS = 60_000;
-let teacherInactivityTimer = null;
-let teacherLogoutInProgress = false;
 function cleanLiveCourseValue(value, legacyValue) { return String(value || '').trim() === legacyValue ? '' : String(value || ''); }
 
 function saveWindowSession() { if (session) sessionStorage.setItem(SESSION_KEY, JSON.stringify(session)); else sessionStorage.removeItem(SESSION_KEY); }
@@ -333,49 +329,6 @@ function quizIsLocked() { return Boolean(state.publishConfirmationPending || (st
 function quizHasEnded() { return Boolean(state.config.end && Date.now() >= new Date(state.config.end).getTime()); }
 function quizHasNotStarted() { return Boolean(state.config.start && Date.now() < new Date(state.config.start).getTime()); }
 function showToast(message, type = 'info') { const toast = document.querySelector('#toast'); const isError = type === 'error' || /failed|could not|unable|error|timed out|not confirmed/i.test(message); toast.textContent = message; toast.classList.toggle('error', isError); toast.classList.add('show'); clearTimeout(showToast.timeout); showToast.timeout = setTimeout(() => toast.classList.remove('show'), isError ? 8000 : 2800); }
-function clearTeacherInactivityTimer() {
-  clearTimeout(teacherInactivityTimer);
-  teacherInactivityTimer = null;
-}
-function scheduleTeacherInactivityCheck() {
-  clearTeacherInactivityTimer();
-  if (session?.role !== 'teacher') return;
-  let lastActivity = Number(localStorage.getItem(TEACHER_LAST_ACTIVITY_KEY));
-  if (!Number.isFinite(lastActivity) || lastActivity <= 0) {
-    lastActivity = Date.now();
-    localStorage.setItem(TEACHER_LAST_ACTIVITY_KEY, String(lastActivity));
-  }
-  const elapsed = Math.max(0, Date.now() - lastActivity);
-  const remaining = TEACHER_INACTIVITY_LIMIT_MS - elapsed;
-  if (remaining <= 0) {
-    void logout(true, true);
-    return;
-  }
-  teacherInactivityTimer = setTimeout(scheduleTeacherInactivityCheck, remaining);
-}
-function recordTeacherActivity() {
-  if (session?.role !== 'teacher' || teacherLogoutInProgress) return;
-  localStorage.setItem(TEACHER_LAST_ACTIVITY_KEY, String(Date.now()));
-  scheduleTeacherInactivityCheck();
-}
-function startTeacherInactivityTracking() {
-  if (session?.role !== 'teacher') return;
-  const lastActivity = Number(localStorage.getItem(TEACHER_LAST_ACTIVITY_KEY));
-  if (!Number.isFinite(lastActivity) || lastActivity <= 0) localStorage.setItem(TEACHER_LAST_ACTIVITY_KEY, String(Date.now()));
-  scheduleTeacherInactivityCheck();
-}
-['pointerdown', 'keydown', 'input', 'touchstart', 'wheel', 'scroll'].forEach(eventName => {
-  document.addEventListener(eventName, recordTeacherActivity, { capture: true, passive: true });
-});
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && session?.role === 'teacher') scheduleTeacherInactivityCheck();
-});
-window.addEventListener('pageshow', () => {
-  if (session?.role === 'teacher') scheduleTeacherInactivityCheck();
-});
-window.addEventListener('storage', event => {
-  if (event.key === TEACHER_LAST_ACTIVITY_KEY && session?.role === 'teacher') scheduleTeacherInactivityCheck();
-});
 window.addEventListener('supabase-sync-error', event => { const operation = event.detail?.operation || 'synchronization'; const message = event.detail?.error?.message || 'Check your Supabase table policies and network connection.'; showToast(`Supabase ${operation} failed: ${message}`, 'error'); });
 function icon(name) { return ({ grid: '▦', question: '?', settings: '⚙', users: '♙', results: '↗', logout: '↪', plus: '+', upload: '↑', download: '↓', clock: '◷', check: '✓', pulse: '◉', book: '▤' }[name] || '•'); }
 function ensureStudentQuestionOrder() { if (!session || session.role !== 'student' || !state.currentQuizId || !state.questions.length) return; if (session.started && session.questionOrder?.length) { state.questions = session.questionOrder; return; } const storedOrder = state.studentQuestionOrders[session.username]; const storedQuestions = storedOrder?.quizId === state.currentQuizId ? storedOrder.questionIds.map(id => state.questions.find(question => question.id === id)).filter(Boolean) : []; const questionOrder = storedQuestions.length === state.questions.length ? storedQuestions : shuffleQuestions(state.questions, session.username); state.studentQuestionOrders[session.username] = { quizId: state.currentQuizId, questionIds: questionOrder.map(question => question.id) }; state.questions = questionOrder; session.questionOrder = questionOrder; saveStudentSession(); }
@@ -988,7 +941,7 @@ function bindEvents() { applyBranding(); const totalQuestionsField = document.qu
   if (!session) document.querySelector('.hint')?.remove();
   if (session?.role === 'teacher' && teacherView === 'users' && !state.importedFile) document.querySelector('.upload')?.insertAdjacentHTML('afterend', '<div class="login-activation"><span><strong>Student login</strong><br><span class="subtle">Upload a workbook before activating student access.</span></span><button class="btn btn-secondary btn-small" disabled>Inactive</button></div>');
   document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => { teacherView = button.dataset.view; app(); }));
-  document.querySelectorAll('[data-action="logout"]').forEach(button => button.addEventListener('click', () => { void logout(); }));
+  document.querySelectorAll('[data-action="logout"]').forEach(button => button.addEventListener('click', logout));
   const passwordToggle = document.querySelector('[data-action="toggle-password"]');
   if (passwordToggle) passwordToggle.addEventListener('click', () => {
     const passwordInput = document.querySelector('#password');
@@ -1055,14 +1008,12 @@ async function handleLogin(event) {
     if (teacherUser?.email?.toLowerCase() !== TEACHER.email
       || teacherUser.app_metadata?.role !== 'teacher') {
       const { error } = await supabase.auth.signOut();
-      localStorage.removeItem(TEACHER_LAST_ACTIVITY_KEY);
       showToast(error
         ? `This Supabase account is not configured for teacher access, and sign-out failed: ${error.message}`
         : 'This Supabase account is not configured for teacher access. Set app_metadata.role to teacher in Supabase Auth.');
       return;
     }
     session = { role: 'teacher', username: TEACHER.username };
-    recordTeacherActivity();
     teacherView = 'overview';
     resumePendingMultipleChoiceSaves();
     app();
@@ -1185,20 +1136,14 @@ async function handleLogin(event) {
   saveStudentSession();
   app();
 }
-async function logout(localOnly = false, automatic = false) {
+async function logout() {
   stopTimer();
-  clearTeacherInactivityTimer();
-  if (session?.role === 'teacher' && teacherLogoutInProgress) return;
-  if (session?.role === 'teacher') teacherLogoutInProgress = true;
   if (session?.role === 'teacher') {
-    const { error } = await supabase.auth.signOut(localOnly ? { scope: 'local' } : undefined);
+    const { error } = await supabase.auth.signOut();
     if (error) {
       showToast(`Teacher sign-out failed: ${error.message}`, 'error');
-      teacherLogoutInProgress = false;
-      recordTeacherActivity();
       return;
     }
-    teacherLogoutInProgress = false;
   }
   if (session?.role === 'student') {
     if (session.resultSyncPending) {
@@ -1241,10 +1186,8 @@ async function logout(localOnly = false, automatic = false) {
       : user);
   }
   session = null;
-  localStorage.removeItem(TEACHER_LAST_ACTIVITY_KEY);
   saveWindowSession();
   app();
-  if (automatic) showToast('You were signed out after one minute of inactivity.');
 }
 async function confirmMultipleChoiceQuestionSaved(question) {
   const { data, error } = await supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle();
@@ -1420,7 +1363,7 @@ async function clearAllQuestions() {
     let syncError = null;
     try {
       await persistQuizControlState();
-      await persistQuizState(state, 'teacher', { waitForSync: true, deleteMissingQuestions: true });
+      await persistQuizState(state, 'teacher', { waitForSync: true });
     } catch (error) {
       syncError = error;
     }
@@ -2015,7 +1958,6 @@ stateHydrationPromise = (async () => {
     const user = data?.session?.user;
     if (error || user?.email?.toLowerCase() !== TEACHER.email || user.app_metadata?.role !== 'teacher') {
       session = null;
-      localStorage.removeItem(TEACHER_LAST_ACTIVITY_KEY);
       saveWindowSession();
       if (error) showToast(`Saved teacher session could not be verified: ${error.message}`, 'error');
     }
@@ -2026,7 +1968,6 @@ stateHydrationPromise = (async () => {
   stateHydrated = true;
   app();
   if (session?.role === 'teacher') {
-    startTeacherInactivityTracking();
     resumePendingMultipleChoiceSaves();
     if (state.publishConfirmationPending) {
       teacherMutationInFlight = true;
