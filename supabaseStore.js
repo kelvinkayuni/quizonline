@@ -979,7 +979,9 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
       savedIds.add(savedQuestion.id);
     }
 
-    const staleIds = existingQuestions.data.map(row => row.id).filter(id => !savedIds.has(id));
+    const staleIds = optionsToPersist.deleteMissingQuestions
+      ? existingQuestions.data.map(row => row.id).filter(id => !savedIds.has(id))
+      : [];
     if (staleIds.length && !questionSyncFailed) {
       const result = await supabase.from('questions').delete().in('id', staleIds);
       if (result.error) {

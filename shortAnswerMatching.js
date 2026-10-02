@@ -181,6 +181,7 @@ const stopWords = new Set([
   'her', 'our', 'your', 'my', 'me', 'you', 'we', 'they', 'he', 'she',
   'i', 'us', 'them', 'him'
 ]);
+const ignoredWords = new Set(['characterized', 'by', 'while', 'and', 'have', 'has']);
 const ignorableBetweenWords = new Set(['is', 'more', 'prone', 'less']);
 const auxiliaryVerbs = new Set([
   'be', 'am', 'is', 'are', 'was', 'were', 'been', 'being',
@@ -198,6 +199,13 @@ const tensNumbers = new Map([
   ['sixty', 60], ['seventy', 70], ['eighty', 80], ['ninety', 90]
 ]);
 const compoundPhrases = [
+  { words: ['man', 'made', 'glass'], value: 'man_made_glass' },
+  { words: ['gas', 'bubbles'], value: 'gas_inclusion' },
+  { words: ['gas', 'inclusions'], value: 'gas_inclusion' },
+  { words: ['solid', 'inclusion'], value: 'solid_inclusion' },
+  { words: ['white', 'inclusion'], value: 'solid_inclusion' },
+  { words: ['liquid', 'inclusion'], value: 'liquid_inclusion' },
+  { words: ['body', 'color'], value: 'body_color' },
   { words: ['high', 'specific', 'gravity'], value: 'high_density' },
   { words: ['lower', 'specific', 'gravity'], value: 'low_density' },
   { words: ['low', 'specific', 'gravity'], value: 'low_density' },
@@ -444,7 +452,7 @@ function canonicalizeTokens(tokens) {
 }
 
 function normalizeAnswerTokens(value) {
-  const tokens = canonicalizeTokens(tokenize(value));
+  const tokens = canonicalizeTokens(tokenize(value).filter(word => !ignoredWords.has(word)));
   const normalized = [];
   let negated = false;
 
