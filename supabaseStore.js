@@ -603,7 +603,9 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true, 
       Array.isArray(snapshotQuestions) ? snapshotQuestions : [],
       Array.isArray(workspace.questionBank) ? workspace.questionBank : []
     );
-    if (workspace.currentQuizQuestions?.quizId === state.currentQuizId && Array.isArray(snapshotQuestions)) {
+    if (state.currentQuizId
+      && workspace.currentQuizQuestions?.quizId === state.currentQuizId
+      && Array.isArray(snapshotQuestions)) {
       state.questions = mergeUnconfirmedLocalQuestions(
         restoreQuestionMetadata(
           snapshotQuestions.map(normalizeQuestion),
