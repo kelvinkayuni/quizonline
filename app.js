@@ -1705,7 +1705,10 @@ function startTimer() {
   }, 1000);
 }
 function stopTimer() { if (timerId) clearInterval(timerId); timerId = null; }
-function submitAnswer() { if (state.quizStopped || quizHasEnded() || session.quizId !== state.currentQuizId) return showToast('This quiz is no longer active.'); const orderedQuestions = session.questionOrder || state.questions; const question = orderedQuestions[session.index]; session.feedback = { correct: session.selected === question.correct }; session.answers.push({ questionId: question.id, selected: session.selected, correct: session.feedback.correct }); saveSubmittedStudentAnswer(); app(); }
+function hasAnsweredQuestion(studentSession, question) {
+  return (studentSession.answers || []).some(answer => String(answer.questionId) === String(question.id));
+}
+function submitAnswer() { if (state.quizStopped || quizHasEnded() || session.quizId !== state.currentQuizId) return showToast('This quiz is no longer active.'); const orderedQuestions = session.questionOrder || state.questions; const question = orderedQuestions[session.index]; if (hasAnsweredQuestion(session, question)) return; session.feedback = { correct: session.selected === question.correct }; session.answers.push({ questionId: question.id, selected: session.selected, correct: session.feedback.correct }); saveSubmittedStudentAnswer(); app(); }
 function nextQuestion() { if (state.quizStopped || quizHasEnded() || session.quizId !== state.currentQuizId) return showToast('This quiz is no longer active.'); const orderedQuestions = session.questionOrder || state.questions; if (session.index >= Math.min(state.config.totalQuestions, orderedQuestions.length) - 1) return finishQuiz(false); session.index += 1; session.selected = null; session.feedback = null; saveStudentSession(); app(); }
 function finalizeStudentResult(studentSession, autoSubmitted) {
   const orderedQuestions = studentSession.questionOrder || state.questions;
@@ -1761,7 +1764,10 @@ function finalizeStudentResult(studentSession, autoSubmitted) {
     quizId: studentSession.quizId || state.currentQuizId,
     answers: studentSession.answers || [],
     questionDetails,
-    attempted: (studentSession.answers || []).length,
+    attempted: new Set((studentSession.answers || [])
+      .map(answer => answer.questionId)
+      .filter(questionId => questionId != null && String(questionId) !== '')
+      .map(String)).size,
     correct,
     incorrect,
     partial,
@@ -1966,6 +1972,7 @@ submitAnswer = function submitTypedOrMultipleChoiceAnswer() {
   const question = (session?.questionOrder || state.questions)[session?.index];
   if (question?.type !== 'short-answer') return submitMultipleChoiceAnswer();
   if (state.quizStopped || quizHasEnded() || session.quizId !== state.currentQuizId) return showToast('This quiz is no longer active.');
+  if (hasAnsweredQuestion(session, question)) return;
   const response = String(session.response || '').trim();
   if (!response) return;
   const credit = shortAnswerMatchScore(question.answer, response);

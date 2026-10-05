@@ -251,7 +251,10 @@ function normalizeQuestion(row) {
 
 function normalizeAttempt(row) {
   const answers = Array.isArray(row.answers) ? row.answers : [];
-  const attempted = row.attempted ?? answers.length;
+  const attempted = new Set(answers
+    .map(answer => answer.questionId)
+    .filter(questionId => questionId != null && String(questionId) !== '')
+    .map(String)).size;
   const incorrect = row.incorrect ?? answers.filter(answer => !answer.correct && !answer.partial).length;
   const correct = row.correct ?? answers.filter(answer => answer.correct).length;
   const partial = answers.filter(answer => answer.partial).length;
