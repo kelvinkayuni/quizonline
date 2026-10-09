@@ -11,11 +11,12 @@ async function scoreShortAnswerWithEmbedding(expectedAnswer, studentResponse) {
 
   try {
     const { data, error } = await supabase.functions.invoke('swift-processor', {
-      body: {
-        expectedAnswer: String(expectedAnswer || ''),
-        studentResponse: String(studentResponse || '')
-      }
-    });
+  method: 'POST',  // ADD THIS LINE
+  body: {
+    expectedAnswer: String(expectedAnswer || ''),
+    studentResponse: String(studentResponse || '')
+  }
+});
 
     if (error) throw error;
 
