@@ -10,7 +10,7 @@ async function scoreShortAnswerWithEmbedding(expectedAnswer, studentResponse) {
   }
 
   try {
-    const { data, error } = await supabase.functions.invoke('score-short-answer', {
+    const { data, error } = await supabase.functions.invoke('swift-processor', {
       body: {
         expectedAnswer: String(expectedAnswer || ''),
         studentResponse: String(studentResponse || '')
