@@ -4,7 +4,29 @@ import { supabase } from './supabase.js';
 import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, deleteTeacherQuizQuestionHistory, hydrateQuizState, listTeacherQuizQuestionHistory, loadStudentQuizReport, loadStudentQuizResult, loadTeacherQuizQuestionHistory, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt } from './supabaseStore.js';
 import { loadLiveStudentUsernames, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { shortAnswerMatchScore } from './shortAnswerMatching.js';
+async function scoreShortAnswerWithEmbedding(expectedAnswer, studentResponse) {
+  if (!String(expectedAnswer || '').trim() || !String(studentResponse || '').trim()) {
+    return 0;
+  }
 
+  try {
+    const { data, error } = await supabase.functions.invoke('score-short-answer', {
+      body: {
+        expectedAnswer: String(expectedAnswer || ''),
+        studentResponse: String(studentResponse || '')
+      }
+    });
+
+    if (error) throw error;
+
+    const score = Number(data?.score ?? 0);
+    if (Number.isFinite(score)) return Math.max(0, Math.min(1, score));
+    return 0;
+  } catch (error) {
+    console.warn('Embedding scoring failed, falling back to rule-based:', error);
+    return shortAnswerMatchScore(expectedAnswer, studentResponse);
+  }
+}
 async function refreshStudentQuizState() {
   if (!session || session.role !== 'student') return;
   let configResult;
