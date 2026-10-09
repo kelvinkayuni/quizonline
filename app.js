@@ -1990,17 +1990,19 @@ document.addEventListener('input', event => {
 });
 
 const submitMultipleChoiceAnswer = submitAnswer;
-submitAnswer = function submitTypedOrMultipleChoiceAnswer() {
+submitAnswer = async function submitTypedOrMultipleChoiceAnswer() {
   const question = (session?.questionOrder || state.questions)[session?.index];
   if (question?.type !== 'short-answer') return submitMultipleChoiceAnswer();
   if (state.quizStopped || quizHasEnded() || session.quizId !== state.currentQuizId) return showToast('This quiz is no longer active.');
   if (hasAnsweredQuestion(session, question)) return;
   const response = String(session.response || '').trim();
   if (!response) return;
-  const credit = shortAnswerMatchScore(question.answer, response);
+
+  const credit = await scoreShortAnswerWithEmbedding(question.answer, response);
   const correct = credit === 1;
   const marksAwarded = Math.round((Number(question.marks) || 1) * credit);
   const partial = !correct && marksAwarded > 0;
+
   session.feedback = { correct, partial, marksAwarded };
   session.answers.push({ questionId: question.id, selected: response, correct, partial, marksAwarded });
   saveSubmittedStudentAnswer();
