@@ -381,7 +381,26 @@ window.addEventListener('supabase-sync-error', event => { const operation = even
 function icon(name) { return ({ grid: '▦', question: '?', settings: '⚙', users: '♙', results: '↗', logout: '↪', plus: '+', upload: '↑', download: '↓', clock: '◷', check: '✓', pulse: '◉', book: '▤' }[name] || '•'); }
 function ensureStudentQuestionOrder() { if (!session || session.role !== 'student' || !state.currentQuizId || !state.questions.length) return; if (session.started && session.questionOrder?.length) { state.questions = session.questionOrder; return; } const storedOrder = state.studentQuestionOrders[session.username]; const storedQuestions = storedOrder?.quizId === state.currentQuizId ? storedOrder.questionIds.map(id => state.questions.find(question => question.id === id)).filter(Boolean) : []; const questionOrder = storedQuestions.length === state.questions.length ? storedQuestions : shuffleQuestions(state.questions, session.username); state.studentQuestionOrders[session.username] = { quizId: state.currentQuizId, questionIds: questionOrder.map(question => question.id) }; state.questions = questionOrder; session.questionOrder = questionOrder; saveStudentSession(); }
 function app() { if (session && !stateHydrated) { document.querySelector('#app').innerHTML = '<main class="main"><div class="quiz-shell"><section class="card result-hero"><div class="eyebrow kicker">Connecting</div><h2>Loading the current workspace...</h2></section></div></main>'; return; } ensureStudentQuestionOrder(); document.querySelector('#app').innerHTML = session ? (session.role === 'teacher' ? teacherApp() : (session.completed ? studentApp() : (session.started ? studentApp() : studentQuizLobby()))) : loginApp(); saveWindowSession(); restoreTeacherDrafts(); bindEvents(); }
-function reconcileStudentSession() { if (!session || session.role !== 'student') return; const hasActiveQuiz = Boolean(state.questionsPublished && !state.quizStopped && state.currentQuizId && state.questions.length); if (session.quizId === state.currentQuizId && (hasActiveQuiz || session.completed)) return; stopTimer(); session.started = false; session.quizId = state.currentQuizId; session.completed = false; session.result = null; session.selected = null; session.feedback = null; session.index = 0; session.answers = []; session.questionOrder = null; saveStudentSession(); }
+function reconcileStudentSession() {
+  if (!session || session.role !== 'student') return;
+  const hasActiveQuiz = Boolean(state.questionsPublished && !state.quizStopped && state.currentQuizId && state.questions.length);
+  if (session.quizId === state.currentQuizId && (hasActiveQuiz || session.completed)) return;
+  stopTimer();
+  session.started = false;
+  session.quizId = state.currentQuizId;
+  session.completed = false;
+  session.result = null;
+  session.selected = null;
+  session.feedback = null;
+  session.index = 0;
+  session.answers = [];
+  session.questionOrder = null;
+  session.attemptGeneration = null;
+  session.attemptRevision = null;
+  session.attemptOwnerToken = null;
+  session.attemptRequiresRemoteRestore = false;
+  saveStudentSession();
+}
 function loginApp() {
   return `<main class="login-page"><section class="login-art"><div class="brand"><span class="brand-mark">OQ</span><strong>ONLINE QUIZ</strong></div><div class="art-copy"><div class="eyebrow">Learning assessment</div><h1>Make every answer count.</h1><p>A focused space for thoughtful quizzes, clear feedback, and better learning outcomes.</p></div><div class="art-note">SECURE ASSESSMENT PORTAL · 2026</div></section><section class="login-side"><div class="login-box"><div class="eyebrow kicker">Secure access</div><h2>Sign in to continue</h2><p class="subtle">${stateHydrated ? 'Enter your username and password to unlock your account.' : 'Connecting to the quiz workspace...'}</p><form id="login-form" autocomplete="off"><div class="field"><label for="username">Username</label><input id="username" name="username" autocomplete="off" placeholder="Enter your username" required /></div><div class="field"><label for="password">Password</label><div class="password-field"><input id="password" name="password" type="password" autocomplete="new-password" placeholder="Enter your password" required /><button class="password-toggle" type="button" data-action="toggle-password" aria-label="Show password" aria-pressed="false" title="Show password"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div><button class="btn btn-primary login-submit" ${stateHydrated ? '' : 'disabled'}>Sign in <span>→</span></button></form></div></section></main>`;
 }
@@ -1727,8 +1746,9 @@ function finalizeStudentResult(studentSession, autoSubmitted) {
     totalMarks = roundToOneDecimal(totalMarks + questionMarks);
     const answer = answersById[question.id];
     const savedMarks = Number(answer?.marksAwarded);
+    const boundedMarks = Math.min(questionMarks, Math.max(0, savedMarks));
     const marksAwarded = answer && Number.isFinite(savedMarks)
-      ? roundToOneDecimal(Math.min(questionMarks, Math.max(0, savedMarks)))
+      ? roundToOneDecimal(boundedMarks)
       : answer?.correct ? questionMarks : 0;
     score = roundToOneDecimal(score + marksAwarded);
     if (answer?.correct) correct++;
@@ -1740,8 +1760,9 @@ function finalizeStudentResult(studentSession, autoSubmitted) {
     const answer = answersById[question.id];
     const marksPossible = roundToOneDecimal(Number(question.marks) || 0);
     const savedMarks = Number(answer?.marksAwarded);
+    const boundedMarks = Math.min(marksPossible, Math.max(0, savedMarks));
     const marksAwarded = answer && Number.isFinite(savedMarks)
-      ? roundToOneDecimal(Math.min(marksPossible, Math.max(0, savedMarks)))
+      ? roundToOneDecimal(boundedMarks)
       : answer?.correct ? marksPossible : 0;
     const selectedIndex = answer?.selected == null ? NaN : Number(answer.selected);
     const studentAnswer = question.type === 'short-answer'
@@ -1977,7 +1998,6 @@ submitAnswer = async function submitTypedOrMultipleChoiceAnswer() {
   if (shortAnswerSubmissionInProgress) return;
   const response = String(session.response || '').trim();
   if (!response) return;
-
   shortAnswerSubmissionInProgress = true;
   const submitButton = document.querySelector('[data-action="submit-answer"]');
   if (submitButton) {
