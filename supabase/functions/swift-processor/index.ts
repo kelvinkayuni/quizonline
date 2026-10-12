@@ -68,7 +68,7 @@ serve(async request => {
 
     if (!response.ok) {
       console.error('Hugging Face inference failed with status', response.status);
-      return jsonResponse({ error: 'Hugging Face inference failed.' }, 502);
+      return jsonResponse({ error: 'Hugging Face inference failed.', providerStatus: response.status }, 502);
     }
 
     const embeddings: unknown = await response.json();
