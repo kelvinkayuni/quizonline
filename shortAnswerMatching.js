@@ -470,11 +470,8 @@ function normalizeAnswerTokens(value) {
     }
 
     const baseWord = word.replace(/^neg_/, '');
-    if (baseWord && !stopWords.has(baseWord) && !auxiliaryVerbs.has(baseWord)) {
-      normalized.push(negated ? `neg_${baseWord}` : baseWord);
-    } else if (baseWord) {
-      normalized.push(negated ? `neg_${baseWord}` : baseWord);
-    }
+    if (!baseWord || stopWords.has(baseWord) || auxiliaryVerbs.has(baseWord)) continue;
+    normalized.push(negated ? `neg_${baseWord}` : baseWord);
     negated = false;
   }
 
@@ -510,12 +507,11 @@ function overlapCount(expected, response) {
         matched++;
         available.set(word, count - 1);
       }
+    } else if (negatedCount > 0) {
+      available.set(`neg_${baseWord}`, negatedCount - 1);
     } else if (count > 0) {
       matched++;
       available.set(word, count - 1);
-    } else if (negatedCount > 0) {
-      // A negated concept directly blocks the positive concept.
-      available.set(`neg_${baseWord}`, negatedCount - 1);
     }
   });
 

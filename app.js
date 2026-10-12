@@ -4,8 +4,12 @@ import { supabase } from './supabase.js';
 import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, deleteTeacherQuizQuestionHistory, hydrateQuizState, listTeacherQuizQuestionHistory, loadStudentQuizReport, loadStudentQuizResult, loadTeacherQuizQuestionHistory, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt } from './supabaseStore.js';
 import { loadLiveStudentUsernames, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { shortAnswerMatchScore } from './shortAnswerMatching.js';
-async function scoreShortAnswerWithEmbedding(expectedAnswer, studentResponse) {
-  if (!String(expectedAnswer || '').trim() || !String(studentResponse || '').trim()) {
+const SHORT_ANSWER_FULL_CREDIT_THRESHOLD = 0.72;
+let shortAnswerSubmissionInProgress = false;
+
+async function scoreShortAnswerWithEmbedding(expectedAnswer, studentResponse, referenceAnswer = '') {
+  const semanticAnswer = String(referenceAnswer || '').trim() || String(expectedAnswer || '').trim();
+  if (!semanticAnswer || !String(studentResponse || '').trim()) {
     return 0;
   }
 
@@ -13,16 +17,17 @@ async function scoreShortAnswerWithEmbedding(expectedAnswer, studentResponse) {
     const { data, error } = await supabase.functions.invoke('swift-processor', {
   method: 'POST',
   body: {
-    expectedAnswer: String(expectedAnswer || ''),
+    expectedAnswer: semanticAnswer,
     studentResponse: String(studentResponse || '')
   }
 });
 
     if (error) throw error;
 
-    const score = Number(data?.score ?? 0);
-    if (Number.isFinite(score)) return Math.max(0, Math.min(1, score));
-    return 0;
+    if (typeof data?.score !== 'number' || !Number.isFinite(data.score) || data.score < 0 || data.score > 1) {
+      throw new Error('The embedding grader returned an invalid score.');
+    }
+    return data.score;
   } catch (error) {
     console.warn('Embedding scoring failed, falling back to rule-based:', error);
     return shortAnswerMatchScore(expectedAnswer, studentResponse);
@@ -1996,18 +2001,29 @@ submitAnswer = async function submitTypedOrMultipleChoiceAnswer() {
   if (question?.type !== 'short-answer') return submitMultipleChoiceAnswer();
   if (state.quizStopped || quizHasEnded() || session.quizId !== state.currentQuizId) return showToast('This quiz is no longer active.');
   if (hasAnsweredQuestion(session, question)) return;
+  if (shortAnswerSubmissionInProgress) return;
   const response = String(session.response || '').trim();
   if (!response) return;
 
-  const credit = await scoreShortAnswerWithEmbedding(question.answer, response);
-  const correct = credit === 1;
-  const marksAwarded = Math.round((Number(question.marks) || 1) * credit);
-  const partial = !correct && marksAwarded > 0;
-
-  session.feedback = { correct, partial, marksAwarded };
-  session.answers.push({ questionId: question.id, selected: response, correct, partial, marksAwarded });
-  saveSubmittedStudentAnswer();
-  app();
+  shortAnswerSubmissionInProgress = true;
+  const submitButton = document.querySelector('[data-action="submit-answer"]');
+  if (submitButton) {
+    submitButton.disabled = true;
+    submitButton.textContent = 'Checking answer...';
+  }
+  try {
+    const credit = await scoreShortAnswerWithEmbedding(question.answer, response, question.referenceAnswer);
+    const correct = credit >= SHORT_ANSWER_FULL_CREDIT_THRESHOLD;
+    const totalMarks = Number(question.marks) || 1;
+    const marksAwarded = correct ? totalMarks : Math.round(totalMarks * credit);
+    const partial = !correct && marksAwarded > 0;
+    session.feedback = { correct, partial, marksAwarded };
+    session.answers.push({ questionId: question.id, selected: response, correct, partial, marksAwarded });
+    saveSubmittedStudentAnswer();
+    app();
+  } finally {
+    shortAnswerSubmissionInProgress = false;
+  }
 };
 
 nextQuestion = function nextTypedOrMultipleChoiceQuestion() {
