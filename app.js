@@ -381,6 +381,13 @@ window.addEventListener('supabase-sync-error', event => { const operation = even
 function icon(name) { return ({ grid: '▦', question: '?', settings: '⚙', users: '♙', results: '↗', logout: '↪', plus: '+', upload: '↑', download: '↓', clock: '◷', check: '✓', pulse: '◉', book: '▤' }[name] || '•'); }
 function ensureStudentQuestionOrder() { if (!session || session.role !== 'student' || !state.currentQuizId || !state.questions.length) return; if (session.started && session.questionOrder?.length) { state.questions = session.questionOrder; return; } const storedOrder = state.studentQuestionOrders[session.username]; const storedQuestions = storedOrder?.quizId === state.currentQuizId ? storedOrder.questionIds.map(id => state.questions.find(question => question.id === id)).filter(Boolean) : []; const questionOrder = storedQuestions.length === state.questions.length ? storedQuestions : shuffleQuestions(state.questions, session.username); state.studentQuestionOrders[session.username] = { quizId: state.currentQuizId, questionIds: questionOrder.map(question => question.id) }; state.questions = questionOrder; session.questionOrder = questionOrder; saveStudentSession(); }
 function app() { if (session && !stateHydrated) { document.querySelector('#app').innerHTML = '<main class="main"><div class="quiz-shell"><section class="card result-hero"><div class="eyebrow kicker">Connecting</div><h2>Loading the current workspace...</h2></section></div></main>'; return; } ensureStudentQuestionOrder(); document.querySelector('#app').innerHTML = session ? (session.role === 'teacher' ? teacherApp() : (session.completed ? studentApp() : (session.started ? studentApp() : studentQuizLobby()))) : loginApp(); saveWindowSession(); restoreTeacherDrafts(); bindEvents(); }
+function clearStudentAttemptClaim() {
+  session.attemptGeneration = null;
+  session.attemptRevision = null;
+  session.attemptOwnerToken = null;
+  session.attemptRequiresRemoteRestore = false;
+}
+
 function reconcileStudentSession() {
   if (!session || session.role !== 'student') return;
   const hasActiveQuiz = Boolean(state.questionsPublished && !state.quizStopped && state.currentQuizId && state.questions.length);
@@ -395,10 +402,7 @@ function reconcileStudentSession() {
   session.index = 0;
   session.answers = [];
   session.questionOrder = null;
-  session.attemptGeneration = null;
-  session.attemptRevision = null;
-  session.attemptOwnerToken = null;
-  session.attemptRequiresRemoteRestore = false;
+  clearStudentAttemptClaim();
   saveStudentSession();
 }
 function loginApp() {
@@ -476,6 +480,7 @@ async function refreshStudentQuizStateRaw() {
   const quizStateChanged = quizChanged || quizRemoved || state.quizStopped !== previousStopped || state.questionsPublished !== previousPublished || state.questions.length !== previousQuestionCount;
   if (quizStateChanged) {
     stopTimer();
+    if (session.quizId !== state.currentQuizId) clearStudentAttemptClaim();
     session.started = false;
     session.quizId = state.currentQuizId;
     session.completed = false;
@@ -738,7 +743,7 @@ async function startStudentQuiz() {
       state.config.duration = Number(data.duration) || 0;
       state.config.start = data.start_time ? toDateTimeLocal(data.start_time) : '';
       state.config.end = data.end_time ? toDateTimeLocal(data.end_time) : '';
-      session.quizId = state.currentQuizId;
+      reconcileStudentSession();
     }
   }
   if (state.quizStopped) return showToast('This quiz has been stopped by the teacher.');
