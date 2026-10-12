@@ -7,32 +7,6 @@ import { shortAnswerMatchScore } from './shortAnswerMatching.js';
 const SHORT_ANSWER_FULL_CREDIT_THRESHOLD = 0.72;
 let shortAnswerSubmissionInProgress = false;
 
-async function scoreShortAnswerWithEmbedding(expectedAnswer, studentResponse, referenceAnswer = '') {
-  const semanticAnswer = String(referenceAnswer || '').trim() || String(expectedAnswer || '').trim();
-  if (!semanticAnswer || !String(studentResponse || '').trim()) {
-    return 0;
-  }
-
-  try {
-    const { data, error } = await supabase.functions.invoke('swift-processor', {
-  method: 'POST',
-  body: {
-    expectedAnswer: semanticAnswer,
-    studentResponse: String(studentResponse || '')
-  }
-});
-
-    if (error) throw error;
-
-    if (typeof data?.score !== 'number' || !Number.isFinite(data.score) || data.score < 0 || data.score > 1) {
-      throw new Error('The embedding grader returned an invalid score.');
-    }
-    return data.score;
-  } catch (error) {
-    console.warn('Embedding scoring failed, falling back to rule-based:', error);
-    return shortAnswerMatchScore(expectedAnswer, studentResponse);
-  }
-}
 async function refreshStudentQuizState() {
   if (!session || session.role !== 'student') return;
   let configResult;
@@ -2012,7 +1986,7 @@ submitAnswer = async function submitTypedOrMultipleChoiceAnswer() {
     submitButton.textContent = 'Checking answer...';
   }
   try {
-    const credit = await scoreShortAnswerWithEmbedding(question.answer, response, question.referenceAnswer);
+    const credit = shortAnswerMatchScore(question.answer, response);
     const correct = credit >= SHORT_ANSWER_FULL_CREDIT_THRESHOLD;
     const totalMarks = Number(question.marks) || 1;
     const marksAwarded = correct ? totalMarks : Math.round(totalMarks * credit);
