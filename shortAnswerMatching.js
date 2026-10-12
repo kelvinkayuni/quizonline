@@ -535,8 +535,7 @@ export function shortAnswerMatchScore(expectedAnswer, studentResponse) {
   const groups = expectedGroups(expectedAnswer);
   if (!responseWords.length || !groups.length) return 0;
 
-  let totalMatched = 0;
-  let totalExpected = 0;
+  let totalCoverage = 0;
 
   groups.forEach(alternatives => {
     const best = alternatives
@@ -544,18 +543,25 @@ export function shortAnswerMatchScore(expectedAnswer, studentResponse) {
         const orderedMatch = orderedPhraseMatch(words, responseWords);
         return {
           words,
-          matched: orderedMatch ? words.length : overlapCount(words, responseWords)
+          coverage: orderedMatch ? 1 : overlapCount(words, responseWords) / words.length
         };
       })
-      .sort((left, right) => right.matched / right.words.length - left.matched / left.words.length)[0];
-    totalMatched += best.matched;
-    totalExpected += best.words.length;
+      .sort((left, right) => right.coverage - left.coverage)[0];
+    totalCoverage += best.coverage;
   });
 
-  const similarity = totalExpected ? totalMatched / totalExpected : 0;
-  if (similarity === 1) return 1;
-  if (similarity >= 0.5) return 0.5;
-  return similarity >= 0.25 ? 0.25 : 0;
+  return totalCoverage / groups.length;
+}
+
+export const SHORT_ANSWER_ZERO_THRESHOLD = 0.2;
+export const SHORT_ANSWER_FULL_CREDIT_THRESHOLD = 0.9;
+
+export function shortAnswerMarksAwarded(matchScore, totalMarks) {
+  const marks = Math.max(0, Math.round(Number(totalMarks) || 0));
+  const score = Number(matchScore);
+  if (!Number.isFinite(score) || score <= SHORT_ANSWER_ZERO_THRESHOLD || marks === 0) return 0;
+  if (score >= SHORT_ANSWER_FULL_CREDIT_THRESHOLD) return marks;
+  return Math.min(marks - 1, Math.round(marks * score));
 }
 
 export function shortAnswerMatches(expectedAnswer, studentResponse) {
