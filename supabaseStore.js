@@ -1,4 +1,5 @@
 import { supabase } from './supabase.js';
+import { roundToOneDecimal } from './shortAnswerMatching.js';
 
 let persistenceEnabled = false;
 let syncQueue = Promise.resolve();
@@ -26,10 +27,10 @@ function attemptDataFromSession(studentSession) {
   const questionDetails = (studentSession.questionOrder || []).flatMap((question, index) => {
     const answer = answersById[question.id];
     if (!answer) return [];
-    const marksPossible = Math.round(Number(question.marks) || 0);
+    const marksPossible = roundToOneDecimal(Number(question.marks) || 0);
     const savedMarks = Number(answer.marksAwarded);
     const marksAwarded = Number.isFinite(savedMarks)
-      ? Math.round(Math.min(marksPossible, Math.max(0, savedMarks)))
+      ? roundToOneDecimal(Math.min(marksPossible, Math.max(0, savedMarks)))
       : answer.correct ? marksPossible : 0;
     const selectedIndex = answer.selected == null ? NaN : Number(answer.selected);
     const studentAnswer = question.type === 'short-answer'

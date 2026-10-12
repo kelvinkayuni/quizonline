@@ -3,7 +3,7 @@ function studentCourseDetails() { const courseName = courseDisplayValue(state.co
 import { supabase } from './supabase.js';
 import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, deleteTeacherQuizQuestionHistory, hydrateQuizState, listTeacherQuizQuestionHistory, loadStudentQuizReport, loadStudentQuizResult, loadTeacherQuizQuestionHistory, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt } from './supabaseStore.js';
 import { loadLiveStudentUsernames, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
-import { SHORT_ANSWER_FULL_CREDIT_THRESHOLD, shortAnswerMarksAwarded, shortAnswerMatchScore } from './shortAnswerMatching.js';
+import { SHORT_ANSWER_FULL_CREDIT_THRESHOLD, roundToOneDecimal, shortAnswerMarksAwarded, shortAnswerMatchScore } from './shortAnswerMatching.js';
 let shortAnswerSubmissionInProgress = false;
 
 async function refreshStudentQuizState() {
@@ -1723,14 +1723,14 @@ function finalizeStudentResult(studentSession, autoSubmitted) {
   let partial = 0;
 
   quizQuestions.forEach(question => {
-    const questionMarks = Math.round(Number(question.marks) || 0);
-    totalMarks += questionMarks;
+    const questionMarks = roundToOneDecimal(Number(question.marks) || 0);
+    totalMarks = roundToOneDecimal(totalMarks + questionMarks);
     const answer = answersById[question.id];
     const savedMarks = Number(answer?.marksAwarded);
     const marksAwarded = answer && Number.isFinite(savedMarks)
-      ? Math.round(Math.min(questionMarks, Math.max(0, savedMarks)))
+      ? roundToOneDecimal(Math.min(questionMarks, Math.max(0, savedMarks)))
       : answer?.correct ? questionMarks : 0;
-    score += marksAwarded;
+    score = roundToOneDecimal(score + marksAwarded);
     if (answer?.correct) correct++;
     else if (answer?.partial || marksAwarded > 0) partial++;
     else if (answer) incorrect++;
@@ -1738,10 +1738,10 @@ function finalizeStudentResult(studentSession, autoSubmitted) {
 
   const questionDetails = quizQuestions.map((question, index) => {
     const answer = answersById[question.id];
-    const marksPossible = Math.round(Number(question.marks) || 0);
+    const marksPossible = roundToOneDecimal(Number(question.marks) || 0);
     const savedMarks = Number(answer?.marksAwarded);
     const marksAwarded = answer && Number.isFinite(savedMarks)
-      ? Math.round(Math.min(marksPossible, Math.max(0, savedMarks)))
+      ? roundToOneDecimal(Math.min(marksPossible, Math.max(0, savedMarks)))
       : answer?.correct ? marksPossible : 0;
     const selectedIndex = answer?.selected == null ? NaN : Number(answer.selected);
     const studentAnswer = question.type === 'short-answer'
@@ -1937,7 +1937,7 @@ questionsView = function questionBankWithShortAnswers() {
   }
   const disabled = quizIsLocked() ? 'disabled' : '';
   const shortAnswerForm = `<section class="short-answer-section"><div class="short-answer-heading"><h3>${editingShortAnswer ? 'Edit short answer question' : 'Short answer question'}</h3><p class="subtle">Expected concepts are used for marking; the reference answer is for teacher use only.</p></div><form id="short-answer-form"><input type="hidden" name="shortId" value="${editingShortAnswer ? esc(questionBeingEdited.id) : ''}" /><div class="field"><label>Question prompt</label><textarea name="shortText" placeholder="Write the question students will see..." required ${disabled}>${editingShortAnswer ? esc(questionBeingEdited.text) : ''}</textarea></div><div class="field" style="margin-top:15px"><label>Answer</label><textarea name="referenceAnswer" placeholder="Teacher reference answer (not used for marking or shown to students)" ${disabled}>${editingShortAnswer ? esc(questionBeingEdited.referenceAnswer || '') : ''}</textarea></div><div class="form-grid short-answer-form-grid" style="margin-top:15px"><div class="field"><label>Expected concepts</label><input name="expectedAnswer" placeholder="Concepts and accepted terms used for marking" value="${editingShortAnswer ? esc(questionBeingEdited.answer || '') : ''}" required ${disabled} /><small class="subtle">This is used to mark student responses and is not shown to students.</small></div><div class="field"><label>Marks</label><input name="shortMarks" type="number" min="1" value="${editingShortAnswer ? Number(questionBeingEdited.marks) || 1 : ''}" required ${disabled} /></div></div><div style="display:flex;gap:9px;margin-top:18px"><button class="btn btn-primary" ${disabled}>${editingShortAnswer ? 'Update short answer' : 'Save short answer'}</button>${editingShortAnswer ? '<button type="button" class="btn btn-secondary" data-action="cancel-edit">Cancel</button>' : ''}</div></form></section>`;
-  return markup.replace('</form></div><div class="card panel">', `</form>${shortAnswerForm}</div><div class="card panel">`).replace('<small class="subtle">This is used to mark student responses and is not shown to students.</small>', '<small class="subtle">Separate required concepts with semicolons and alternatives with /. Concepts are equally weighted; 20% or less earns zero, while 90% or more earns full marks.</small>');
+  return markup.replace('</form></div><div class="card panel">', `</form>${shortAnswerForm}</div><div class="card panel">`).replace('<input name="shortMarks" type="number" min="1"', '<input name="shortMarks" type="number" min="1" step="0.1"').replace('<small class="subtle">This is used to mark student responses and is not shown to students.</small>', '<small class="subtle">Separate required concepts with semicolons and alternatives with /. Concepts are equally weighted; 20% or less earns zero, while 90% or more earns full marks.</small>');
 };
 
 function saveShortAnswerQuestion(event) {

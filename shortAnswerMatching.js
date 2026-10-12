@@ -556,12 +556,19 @@ export function shortAnswerMatchScore(expectedAnswer, studentResponse) {
 export const SHORT_ANSWER_ZERO_THRESHOLD = 0.2;
 export const SHORT_ANSWER_FULL_CREDIT_THRESHOLD = 0.9;
 
+export function roundToOneDecimal(value) {
+  const number = Number(value);
+  return Number.isFinite(number)
+    ? Math.round((number + Number.EPSILON) * 10) / 10
+    : 0;
+}
+
 export function shortAnswerMarksAwarded(matchScore, totalMarks) {
-  const marks = Math.max(0, Math.round(Number(totalMarks) || 0));
+  const marks = Math.max(0, roundToOneDecimal(totalMarks));
   const score = Number(matchScore);
   if (!Number.isFinite(score) || score <= SHORT_ANSWER_ZERO_THRESHOLD || marks === 0) return 0;
   if (score >= SHORT_ANSWER_FULL_CREDIT_THRESHOLD) return marks;
-  return Math.min(marks - 1, Math.round(marks * score));
+  return Math.min(roundToOneDecimal(marks - 0.1), roundToOneDecimal(marks * score));
 }
 
 export function shortAnswerMatches(expectedAnswer, studentResponse) {
