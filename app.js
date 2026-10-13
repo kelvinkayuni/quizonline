@@ -213,6 +213,8 @@ let timerId = null;
 let editingQuestionId = null;
 let expandedQuestionIds = new Set();
 let selectedResultFileId = null;
+let selectedQuestionHistoryIds = new Set();
+let selectedResultFileIds = new Set();
 let persistenceTimer = null;
 let liveRefreshTimer = null;
 let teacherDeadlineTimer = null;
@@ -459,7 +461,7 @@ function navButton(iconName, label, target, active) { return `<button class="${t
 function timeGreeting() { const hour = new Date().getHours(); if (hour >= 5 && hour < 12) return 'Good morning'; if (hour >= 12 && hour < 17) return 'Good afternoon'; if (hour >= 17 && hour < 21) return 'Good evening'; return 'Good night'; }
 function viewTitle(view) { return ({ overview: `${timeGreeting()}, Kelvin.`, questions: 'Question bank', config: 'Quiz configuration', users: 'Student access', results: 'Results & monitoring' }[view]); }
 function viewDescription(view) { return ({ overview: 'A live view of your assessment workspace.', questions: 'Build reusable questions with flexible scoring.', config: 'Set the rules, timing, and availability window.', users: 'Import and manage student login credentials.', results: 'Track participation and export completed work.' }[view]); }
-function viewContent(view) { return ({ overview: overviewView, questions: questionsView, config: configView, users: usersView, results: resultsView }[view])(); }
+function viewContent(view) { const content = ({ overview: overviewView, questions: questionsView, config: configView, users: usersView, results: resultsView }[view])(); return view === 'results' ? `${content}${resultFileSelectionPanel()}` : content; }
 function overviewView() {
   const online = state.users.filter(user => user.status === 'online').length;
   const average = state.results.length ? Math.round(state.results.reduce((sum, item) => sum + item.percentage, 0) / state.results.length) : 0;
@@ -715,9 +717,37 @@ async function deleteArchivedQuestionSet(quizId) {
   try {
     await deleteTeacherQuizQuestionHistory(quizId);
     teacherQuestionHistory = teacherQuestionHistory.filter(item => item.quiz_id !== quizId);
+    selectedQuestionHistoryIds.delete(quizId);
     showToast(`Archived question history for ${quizId} was deleted.`);
   } catch (error) {
     showToast(`Archived question history could not be deleted: ${error.message || error}`, 'error');
+  } finally {
+    teacherMutationInFlight = false;
+    app();
+  }
+}
+async function deleteSelectedQuestionHistory() {
+  if (teacherMutationInFlight) return;
+  const quizIds = teacherQuestionHistory
+    .map(item => item.quiz_id)
+    .filter(quizId => selectedQuestionHistoryIds.has(quizId));
+  if (!quizIds.length) return;
+  if (!window.confirm(`Delete published question history for ${quizIds.length} selected quiz${quizIds.length === 1 ? '' : 'zes'}? Results, student reports, current questions, and unselected history will remain.`)) return;
+  teacherMutationInFlight = true;
+  app();
+  const deletedQuizIds = [];
+  try {
+    for (const quizId of quizIds) {
+      await deleteTeacherQuizQuestionHistory(quizId);
+      deletedQuizIds.push(quizId);
+    }
+    teacherQuestionHistory = teacherQuestionHistory.filter(item => !deletedQuizIds.includes(item.quiz_id));
+    deletedQuizIds.forEach(quizId => selectedQuestionHistoryIds.delete(quizId));
+    showToast(`Published question history for ${deletedQuizIds.length} quiz${deletedQuizIds.length === 1 ? '' : 'zes'} deleted.`);
+  } catch (error) {
+    teacherQuestionHistory = teacherQuestionHistory.filter(item => !deletedQuizIds.includes(item.quiz_id));
+    deletedQuizIds.forEach(quizId => selectedQuestionHistoryIds.delete(quizId));
+    showToast(`${deletedQuizIds.length} of ${quizIds.length} selected histories were deleted; the remaining deletion failed: ${error.message || error}`, 'error');
   } finally {
     teacherMutationInFlight = false;
     app();
@@ -727,8 +757,49 @@ function teacherQuestionHistoryPanel() {
   if (!questionHistoryVisible) return '';
   if (questionHistoryLoading) return '<section class="card panel student-history-panel"><p class="subtle">Loading published question history...</p></section>';
   if (!teacherQuestionHistory.length) return '<section class="card panel student-history-panel"><p class="subtle">No published quiz question history is available.</p></section>';
-  return `<section class="card panel student-history-panel"><div class="panel-head"><div><h2>Published quiz question history</h2><p class="subtle">Archived snapshots are separate from the current question bank.</p></div></div><div class="activity quiz-question-history-list">${teacherQuestionHistory.map(item => `<div class="activity-item quiz-question-history-item"><div class="quiz-question-history-details"><strong>${esc(item.quiz_id)}</strong><span class="subtle">${esc([item.course_name, item.course_code].filter(Boolean).join(' · ') || 'Quiz')} · ${formatDate(item.published_at)} · ${item.question_count} questions</span></div><div class="quiz-question-history-actions"><button class="btn btn-secondary btn-small quiz-question-history-download" data-action="download-question-history" data-quiz-id="${esc(item.quiz_id)}">Download PDF</button><button class="btn btn-coral btn-small" data-action="delete-question-history" data-quiz-id="${esc(item.quiz_id)}">Delete</button></div></div>`).join('')}</div></section>`;
+  const availableQuizIds = new Set(teacherQuestionHistory.map(item => item.quiz_id));
+  for (const quizId of selectedQuestionHistoryIds) if (!availableQuizIds.has(quizId)) selectedQuestionHistoryIds.delete(quizId);
+  const selectedCount = teacherQuestionHistory.filter(item => selectedQuestionHistoryIds.has(item.quiz_id)).length;
+  return `<section class="card panel student-history-panel"><div class="panel-head"><div><h2>Published quiz question history</h2><p class="subtle">Archived snapshots are separate from the current question bank.</p></div><button type="button" class="btn btn-coral btn-small" data-action="delete-selected-question-history" ${selectedCount && !teacherMutationInFlight ? '' : 'disabled'}>${teacherMutationInFlight ? 'Deleting selected...' : `Delete selected (${selectedCount})`}</button></div><div class="activity quiz-question-history-list">${teacherQuestionHistory.map(item => `<div class="activity-item quiz-question-history-item"><div class="quiz-question-history-details"><strong>${esc(item.quiz_id)}</strong><span class="subtle">${esc([item.course_name, item.course_code].filter(Boolean).join(' · ') || 'Quiz')} · ${formatDate(item.published_at)} · ${item.question_count} questions</span></div><div class="quiz-question-history-actions"><label class="quiz-question-history-select"><input type="checkbox" data-action="select-question-history" data-quiz-id="${esc(item.quiz_id)}" aria-label="Select ${esc(item.quiz_id)}" ${selectedQuestionHistoryIds.has(item.quiz_id) ? 'checked' : ''} ${teacherMutationInFlight ? 'disabled' : ''}></label><button class="btn btn-secondary btn-small quiz-question-history-download" data-action="download-question-history" data-quiz-id="${esc(item.quiz_id)}">Download PDF</button><button class="btn btn-coral btn-small" data-action="delete-question-history" data-quiz-id="${esc(item.quiz_id)}">Delete</button></div></div>`).join('')}</div></section>`;
 }
+function resultFileSelectionPanel() {
+  if (!state.resultFiles.length) return '';
+  const availableFileIds = new Set(state.resultFiles.map(file => file.id));
+  for (const fileId of selectedResultFileIds) if (!availableFileIds.has(fileId)) selectedResultFileIds.delete(fileId);
+  const selectedCount = state.resultFiles.filter(file => selectedResultFileIds.has(file.id)).length;
+  return `<section class="card panel result-file-selection-panel"><div class="panel-head"><div><h2>Select result files</h2><p class="subtle">Selected files and their associated quiz attempts will be deleted.</p></div><button type="button" class="btn btn-coral btn-small" data-action="delete-selected-result-files" ${selectedCount && !teacherMutationInFlight ? '' : 'disabled'}>${teacherMutationInFlight ? 'Deleting selected...' : `Delete selected (${selectedCount})`}</button></div><div class="result-file-selection-list">${state.resultFiles.map(file => `<label class="result-file-choice"><input type="checkbox" data-action="select-result-file" data-file-id="${esc(file.id)}" aria-label="Select ${esc(file.name)}" ${selectedResultFileIds.has(file.id) ? 'checked' : ''} ${teacherMutationInFlight ? 'disabled' : ''}><span><strong>${esc(file.name)}</strong><span class="subtle">${formatDate(file.createdAt)} · ${(file.rows || []).length} results</span></span></label>`).join('')}</div></section>`;
+}
+function updateBulkDeletionButtons() {
+  const archiveCount = teacherQuestionHistory.filter(item => selectedQuestionHistoryIds.has(item.quiz_id)).length;
+  document.querySelectorAll('[data-action="delete-selected-question-history"]').forEach(button => {
+    button.disabled = teacherMutationInFlight || !archiveCount;
+    button.textContent = teacherMutationInFlight ? 'Deleting selected...' : `Delete selected (${archiveCount})`;
+  });
+  const fileCount = state.resultFiles.filter(file => selectedResultFileIds.has(file.id)).length;
+  document.querySelectorAll('[data-action="delete-selected-result-files"]').forEach(button => {
+    button.disabled = teacherMutationInFlight || !fileCount;
+    button.textContent = teacherMutationInFlight ? 'Deleting selected...' : `Delete selected (${fileCount})`;
+  });
+}
+document.addEventListener('change', event => {
+  const checkbox = event.target;
+  if (checkbox.matches('[data-action="select-question-history"]')) {
+    if (checkbox.checked) selectedQuestionHistoryIds.add(checkbox.dataset.quizId);
+    else selectedQuestionHistoryIds.delete(checkbox.dataset.quizId);
+    updateBulkDeletionButtons();
+  } else if (checkbox.matches('[data-action="select-result-file"]')) {
+    if (checkbox.checked) selectedResultFileIds.add(checkbox.dataset.fileId);
+    else selectedResultFileIds.delete(checkbox.dataset.fileId);
+    updateBulkDeletionButtons();
+  }
+});
+document.addEventListener('click', event => {
+  if (event.target.closest('[data-action="delete-selected-question-history"]')) {
+    void deleteSelectedQuestionHistory();
+  } else if (event.target.closest('[data-action="delete-selected-result-files"]')) {
+    void deleteSelectedResultFiles();
+  }
+});
 function questionsView() { const locked = quizIsLocked(); const ended = Boolean(state.questionsPublished && !state.quizStopped && quizHasEnded());
   return `<section class="grid two-col"><div class="card panel"><div class="panel-head"><div><h2>${editingQuestionId ? 'Edit question' : 'Create a question'}</h2><p class="subtle">Add a reusable multiple-choice question.</p></div><span class="badge">${state.questions.length} saved</span></div><form id="question-form"><input type="hidden" name="id" value="${editingQuestionId || ''}" /><div class="field"><label>Question prompt</label><textarea name="text" placeholder="Write the question students will see..." required>${editingQuestionId ? esc(state.questions.find(question => question.id === editingQuestionId)?.text || '') : ''}</textarea></div><div class="field" style="margin-top:15px"><label>Choices <span id="choice-count">(${editingQuestionId ? state.questions.find(question => question.id === editingQuestionId).choices.length : 4})</span></label><div id="choices">${choiceInputsForEditing()}</div><button type="button" class="btn btn-secondary btn-small" data-action="add-choice">+ Add choice</button></div><div class="form-grid" style="margin-top:15px"><div class="field"><label>Correct answer</label><select id="correct-answer" name="correct">${correctOptionsForEditing()}</select></div><div class="field"><label>Marks</label><input name="marks" type="number" min="1" value="${editingQuestionId ? state.questions.find(question => question.id === editingQuestionId).marks : ''}" placeholder="Enter marks" required /></div></div><div style="display:flex;gap:9px;margin-top:18px"><button class="btn btn-primary">${editingQuestionId ? 'Update question' : 'Save question'}</button>${editingQuestionId ? '<button type="button" class="btn btn-secondary" data-action="cancel-edit">Cancel</button>' : ''}</div></form></div><div class="card panel"><div class="panel-head"><div><h2>Saved questions</h2><p class="subtle">${ended ? 'This quiz ended. You can edit and submit an updated quiz.' : state.questionsPublished && !state.quizStopped ? 'Published questions are available to students.' : 'Questions stay private until you submit them.'}</p></div><div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end"><button class="btn btn-secondary btn-small" data-action="download-corrections" ${state.questions.length ? '' : 'disabled'}>Download(PDF)</button><button class="btn btn-secondary btn-small" data-action="clear-questions" ${state.questions.length ? '' : 'disabled'}>Clear all</button><button class="btn btn-primary btn-small" data-action="publish-questions" ${state.questions.length ? '' : 'disabled'}>${state.questionsPublished && !state.quizStopped && !ended ? 'Questions submitted' : 'Submit questions'}</button></div></div><div id="question-list">${questionList()}</div></div></section>`;
 }
@@ -1708,6 +1779,40 @@ async function confirmDeletedQuizAttempts(quizIds) {
   return false;
 }
 async function deleteSelectedResultFile() { const file = state.resultFiles.find(item => item.id === selectedResultFileId) || state.resultFiles[0]; if (!file || teacherMutationInFlight) return; const quizIds = resultFileQuizIds(file); teacherMutationInFlight = true; try { state.deletedQuizIds = [...new Set([...state.deletedQuizIds, ...quizIds])]; state.results = state.results.filter(result => !quizIds.includes(result.quizId)); state.studentHistory = state.studentHistory.filter(result => !quizIds.includes(result.quizId)); state.resultFiles = state.resultFiles.filter(item => item.id !== file.id); selectedResultFileId = state.resultFiles[0]?.id || null; saveState(); try { await persistQuizState(state, 'teacher', { waitForSync: true }); } catch (error) { if (!(await confirmDeletedResultFile(file.id, quizIds))) throw error; } addActivity(`Result file ${file.name} was deleted`, 'results'); showToast('Selected quiz results deleted permanently.'); } catch (error) { showToast(`Selected results could not be deleted: ${error.message || error}`); } finally { teacherMutationInFlight = false; app(); } }
+async function deleteSelectedResultFiles() {
+  if (teacherMutationInFlight) return;
+  const selectedFiles = state.resultFiles.filter(file => selectedResultFileIds.has(file.id));
+  if (!selectedFiles.length) return;
+  const quizIds = [...new Set(selectedFiles.flatMap(resultFileQuizIds))];
+  const attemptNote = quizIds.length ? ` and their ${quizIds.length} associated quiz attempt${quizIds.length === 1 ? '' : 's'}` : '';
+  if (!window.confirm(`Permanently delete ${selectedFiles.length} selected result file${selectedFiles.length === 1 ? '' : 's'}${attemptNote}?`)) return;
+  const previousState = structuredClone(state);
+  const previousSelectedResultFileId = selectedResultFileId;
+  teacherMutationInFlight = true;
+  app();
+  try {
+    const selectedFileIds = new Set(selectedFiles.map(file => file.id));
+    state.deletedQuizIds = [...new Set([...state.deletedQuizIds, ...quizIds])];
+    state.resultFiles = state.resultFiles.filter(file => !selectedFileIds.has(file.id));
+    state.results = state.results.filter(result => !quizIds.includes(result.quizId));
+    state.studentHistory = state.studentHistory.filter(result => !quizIds.includes(result.quizId));
+    selectedResultFileId = state.resultFiles[0]?.id || null;
+    state.activity.unshift({ text: `${selectedFiles.length} quiz result file${selectedFiles.length === 1 ? '' : 's'} were deleted`, type: 'results', time: new Date().toISOString() });
+    state.activity = state.activity.slice(0, 20);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+    await persistQuizState(state, 'teacher', { waitForSync: true, workspaceOnly: true });
+    await deleteQuizAttempts(quizIds);
+    selectedFiles.forEach(file => selectedResultFileIds.delete(file.id));
+    showToast(`${selectedFiles.length} selected result file${selectedFiles.length === 1 ? '' : 's'} deleted.`);
+  } catch (error) {
+    restoreState(previousState);
+    selectedResultFileId = previousSelectedResultFileId;
+    showToast(`Selected result files could not be deleted: ${error.message || error}`, 'error');
+  } finally {
+    teacherMutationInFlight = false;
+    app();
+  }
+}
 async function clearResultFileHistory() {
   if ((!state.resultFiles.length && !state.results.length) || teacherMutationInFlight) return;
   const quizIds = new Set([...state.resultFiles.flatMap(resultFileQuizIds), ...state.results.map(result => result.quizId)].filter(Boolean));

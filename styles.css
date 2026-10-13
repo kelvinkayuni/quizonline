@@ -107,6 +107,12 @@ tr:last-child td { border: 0; }
 .result-history-toolbar .file-selector { flex: 1; }
 .result-history-toolbar .empty { flex: 1; text-align: left; }
 .result-history-toolbar > button { flex: 0 0 auto; margin-top: 22px; }
+.result-file-selection-panel { margin-top: 17px; }
+.result-file-selection-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 8px; max-height: 260px; overflow: auto; }
+.result-file-choice { display: flex; align-items: flex-start; gap: 10px; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: #fbfaf5; cursor: pointer; }
+.result-file-choice input, .quiz-question-history-select input { flex: 0 0 auto; margin-top: 3px; }
+.result-file-choice > span { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.quiz-question-history-select { display: inline-flex; align-items: center; }
 @media (max-width: 620px) { .result-history-toolbar { align-items: stretch; flex-direction: column; } .result-history-toolbar > button { align-self: flex-end; margin-top: 0; } }
 .login-page { display: grid; grid-template-columns: minmax(320px, .8fr) 1.2fr; min-height: 100vh; background: var(--paper); }
 .login-art { display: flex; flex-direction: column; justify-content: space-between; padding: 46px 6vw; background: #1d403d; color: white; overflow: hidden; position: relative; }
