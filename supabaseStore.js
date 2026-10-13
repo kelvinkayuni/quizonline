@@ -525,7 +525,8 @@ function restoreQuestionMetadata(questions, ...metadataSources) {
   });
 }
 
-export async function hydrateQuizState(state, role = 'teacher', persist = true, username = '') {
+export async function hydrateQuizState(state, role = 'teacher', persist = true, username = '', shouldApply = null) {
+  if (shouldApply && !shouldApply()) return;
   const unconfirmedLocalQuestions = role === 'teacher'
     ? state.questions.filter(question => question.syncStatus === 'pending' || question.syncStatus === 'failed')
     : [];
@@ -552,6 +553,7 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true, 
     reportError('initial synchronization', error);
     return;
   }
+  if (shouldApply && !shouldApply()) return;
 
   if (!questionsResult.error) {
     state.questions = mergeUnconfirmedLocalQuestions(

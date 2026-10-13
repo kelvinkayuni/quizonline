@@ -217,6 +217,7 @@ let persistenceTimer = null;
 let liveRefreshTimer = null;
 let teacherDeadlineTimer = null;
 let teacherMutationInFlight = false;
+let teacherWorkspaceMutationVersion = 0;
 let studentHeartbeatTimer = null;
 let studentQuizRefreshTimer = null;
 let studentAttemptSaveTimer = null;
@@ -1038,7 +1039,15 @@ function bindEvents() { applyBranding(); const totalQuestionsField = document.qu
   clearInterval(studentHeartbeatTimer);
   clearInterval(studentQuizRefreshTimer);
   if (session?.role === 'teacher') {
-    liveRefreshTimer = setInterval(async () => { if (teacherMutationInFlight || (teacherView === 'questions' && document.querySelector('#question-form'))) return; await refreshTeacherQuizState(); await hydrateQuizState(state, 'teacher', false); cacheHydratedState(); await refreshLiveStudents(); if (!teacherMutationInFlight && !document.activeElement?.closest('form')) app(); }, 5000);
+    liveRefreshTimer = setInterval(async () => {
+      if (teacherMutationInFlight || (teacherView === 'questions' && document.querySelector('#question-form'))) return;
+      const refreshVersion = teacherWorkspaceMutationVersion;
+      await refreshTeacherQuizState();
+      await hydrateQuizState(state, 'teacher', false, '', () => !teacherMutationInFlight && refreshVersion === teacherWorkspaceMutationVersion);
+      cacheHydratedState();
+      await refreshLiveStudents();
+      if (!teacherMutationInFlight && !document.activeElement?.closest('form')) app();
+    }, 5000);
     if (state.questionsPublished && !state.quizStopped && state.config.end) {
       teacherDeadlineTimer = setInterval(() => { if (quizHasEnded()) void expireQuizDueToTime(); }, 1000);
     }
@@ -1641,6 +1650,7 @@ async function toggleStudentLoginActivation() { if (!state.importedFile || teach
 const toggleStudentLoginActivationHandler = toggleStudentLoginActivation;
 toggleStudentLoginActivation = async function(event) {
   if (!state.importedFile || teacherMutationInFlight) return;
+  teacherWorkspaceMutationVersion++;
   const button = event.currentTarget;
   const expectedState = !state.studentLoginActive;
   button.disabled = true;
