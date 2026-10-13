@@ -1604,6 +1604,17 @@ async function importUsers(event) { const file = event.target.files[0]; if (!fil
 function removeImportedUsers() { const usernames = new Set(state.importedFile?.usernames || []); if (usernames.size) state.users = state.users.filter(user => !usernames.has(user.username)); state.importedFile = null; state.studentLoginActive = false; }
 async function deleteUploadedFile() { if (state.studentLoginActive || teacherMutationInFlight) return; const previousState = structuredClone(state); teacherMutationInFlight = true; try { const usernames = state.importedFile?.usernames || []; await markStudentsOffline(usernames, state.currentQuizId); removeImportedUsers(); saveState({ workspaceOnly: true }); addActivity('The uploaded student workbook was deleted', 'users'); await persistWorkspaceChange(confirmImportedFileDeleted); showToast('Uploaded file removed.'); app(); } catch (error) { restoreState(previousState); showToast(`Uploaded file could not be deleted: ${error.message || error}`); } finally { teacherMutationInFlight = false; } }
 async function toggleStudentLoginActivation() { if (!state.importedFile || teacherMutationInFlight) return; const previousState = structuredClone(state); teacherMutationInFlight = true; try { state.studentLoginActive = !state.studentLoginActive; const expectedState = state.studentLoginActive; if (!expectedState) await markStudentsOffline(state.importedFile.usernames || [], state.currentQuizId); saveState({ workspaceOnly: true }); addActivity(`Uploaded student login ${expectedState ? 'activated' : 'deactivated'}`, 'users'); await persistWorkspaceChange(() => confirmStudentLoginState(expectedState)); showToast(expectedState ? 'Uploaded credentials are now active.' : 'Uploaded credentials are inactive. All imported students were signed out.'); app(); } catch (error) { restoreState(previousState); showToast(`Student login status could not be saved: ${error.message || error}`); } finally { teacherMutationInFlight = false; } }
+const toggleStudentLoginActivationHandler = toggleStudentLoginActivation;
+toggleStudentLoginActivation = async function(event) {
+  if (!state.importedFile || teacherMutationInFlight) return;
+  const button = event.currentTarget;
+  const expectedState = !state.studentLoginActive;
+  button.disabled = true;
+  button.setAttribute('aria-busy', 'true');
+  button.textContent = expectedState ? 'Activating...' : 'Deactivating...';
+  await toggleStudentLoginActivationHandler(event);
+  if (button.isConnected) app();
+};
 function resultFileQuizIds(file) { const quizIds = new Set(); if (file?.id?.startsWith('quiz-')) quizIds.add(file.id.slice(5)); (file?.rows || []).forEach(row => { if (row.quizId) quizIds.add(row.quizId); }); return [...quizIds]; }
 async function confirmDeletedResultFile(fileId, quizIds) {
   for (let attempt = 0; attempt < 4; attempt++) {
