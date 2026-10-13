@@ -231,6 +231,7 @@ let studentAttemptSaveTimer = null;
 let studentAttemptSaveQueue = Promise.resolve();
 let presenceWindowBound = false;
 const SESSION_KEY = 'online-quiz-window-session-v1';
+const STUDENT_PRESENCE_QUIZ_ID = `account-${crypto.randomUUID()}`;
 const TEACHER_LAST_ACTIVITY_KEY = 'online-quiz-teacher-last-activity-v1';
 const TEACHER_INACTIVITY_LIMIT_MS = 60_000;
 let teacherInactivityTimer = null;
@@ -485,18 +486,41 @@ function overviewView() {
   const average = state.results.length ? Math.round(state.results.reduce((sum, item) => sum + item.percentage, 0) / state.results.length) : 0;
   return `<section class="grid stat-grid"><div class="card stat"><span class="eyebrow">Question bank</span><span class="value">${state.questions.length}</span><span class="label">Reusable questions</span></div><div class="card stat"><span class="eyebrow">Student access</span><span class="value">${state.users.length}</span><span class="label">Registered accounts</span></div><div class="card stat"><span class="eyebrow">Live now</span><span class="value">${online}</span><span class="label"><span class="trend">● Active participants</span></span></div><div class="card stat"><span class="eyebrow">Average score</span><span class="value">${average}%</span><span class="label">Across completed quizzes</span></div></section><section class="grid two-col"><div class="card panel"><div class="panel-head"><div><h2>Quiz pulse</h2><p class="subtle">${state.config.start ? `Scheduled for ${formatDate(state.config.start)}` : 'Your next assessment at a glance'}</p></div><button class="btn btn-secondary btn-small" data-view="config">Edit setup</button></div><div class="grid" style="grid-template-columns: repeat(3, 1fr); margin: 30px 0 18px"><div><div class="eyebrow">Questions</div><strong style="display:block;font-size:25px;margin-top:9px">${state.config.totalQuestions}</strong></div><div><div class="eyebrow">Duration</div><strong style="display:block;font-size:25px;margin-top:9px">${state.config.duration}<small style="font-size:12px;color:var(--muted)"> min</small></strong></div><div><div class="eyebrow">Deadline</div><strong style="display:block;font-size:13px;margin-top:13px">${state.config.end ? new Date(state.config.end).toLocaleDateString() : 'Open'}</strong></div></div><div class="progress"><span style="width:${state.questions.length ? Math.min(100, (state.config.totalQuestions / state.questions.length) * 100) : 0}%"></span></div><p class="subtle" style="margin:9px 0 0">${state.questions.length} questions available in the bank</p></div><div class="card panel"><div class="panel-head"><div><h2>Live students</h2><p class="subtle">Presence updates as students enter the quiz.</p></div><span class="badge">${online} online</span></div>${liveStudents()}</div></section><section class="card panel" style="margin-top:17px"><div class="panel-head"><div><h2>Recent activity</h2><p class="subtle">The latest changes in your quiz workspace.</p></div><button class="btn btn-secondary btn-small" data-action="clear-activity" ${state.activity.length ? '' : 'disabled'}>Clear activity</button></div>${activityList()}</section>`;
 }
+function markStudentSessionOnline(targetSession = session) {
+  if (!targetSession || targetSession.role !== 'student') return;
+  void markStudentOnline(targetSession.username, STUDENT_PRESENCE_QUIZ_ID);
+  if (targetSession.started && !targetSession.completed && targetSession.quizId) {
+    void markStudentOnline(targetSession.username, targetSession.quizId);
+  }
+}
+function markStudentSessionOffline(targetSession = session) {
+  if (!targetSession || targetSession.role !== 'student') return;
+  void markStudentOffline(targetSession.username, STUDENT_PRESENCE_QUIZ_ID);
+  if (targetSession.quizId) void markStudentOffline(targetSession.username, targetSession.quizId);
+}
 function revokeStudentAccess() {
   if (!session || session.role !== 'student') return;
   stopTimer();
-  void markStudentOffline(session.username, session.quizId);
+  markStudentSessionOffline(session);
   if (session.originalQuestions) state.questions = session.originalQuestions;
   session = null;
   saveWindowSession();
   showToast('Your student access has been deactivated by the teacher.');
   app();
 }
-function liveStudents() { const online = state.users.filter(user => user.status === 'online'); if (!online.length) return '<div class="empty">No students are currently taking the quiz.</div>'; return `<div class="activity">${online.map(user => `<div class="activity-item"><span class="activity-icon">${icon('pulse')}</span><div><strong>${esc(user.username)}</strong><br><span class="subtle">Currently answering</span></div><span class="status">Online</span></div>`).join('')}</div>`; }
-async function refreshLiveStudents() { if (!session || session.role !== 'teacher') return; if (!state.currentQuizId) { state.users = state.users.map(user => ({ ...user, status: 'offline' })); if (teacherView === 'overview' || teacherView === 'results') app(); return; } const liveUsernames = await loadLiveStudentUsernames(state.currentQuizId); if (!liveUsernames) return; const now = new Date().toISOString(); state.users = state.users.map(user => ({ ...user, status: liveUsernames.has(user.username) ? 'online' : 'offline', lastSeen: liveUsernames.has(user.username) ? user.lastSeen || now : user.lastSeen })); if (teacherView === 'overview' || teacherView === 'results') app(); }
+function liveStudents() { const online = state.users.filter(user => user.status === 'online'); if (!online.length) return '<div class="empty">No students are currently signed in.</div>'; return `<div class="activity">${online.map(user => `<div class="activity-item"><span class="activity-icon">${icon('pulse')}</span><div><strong>${esc(user.username)}</strong><br><span class="subtle">Signed in</span></div><span class="status">Online</span></div>`).join('')}</div>`; }
+async function refreshLiveStudents() {
+  if (!session || session.role !== 'teacher') return;
+  const liveUsernames = await loadLiveStudentUsernames();
+  if (!liveUsernames) return;
+  const now = new Date().toISOString();
+  state.users = state.users.map(user => ({
+    ...user,
+    status: liveUsernames.has(user.username) ? 'online' : 'offline',
+    lastSeen: liveUsernames.has(user.username) ? user.lastSeen || now : user.lastSeen
+  }));
+  if (teacherView === 'overview' || teacherView === 'results') app();
+}
 async function refreshTeacherQuizState() { if (!session || session.role !== 'teacher' || teacherMutationInFlight) return; const { data, error } = await supabase.from('quiz_config').select('quiz_id, published, stopped, total_questions, duration, start_time, end_time, course_name, course_code').eq('id', 1).maybeSingle(); if (error || !data) return; const nextQuizId = data.quiz_id || null; const nextStopped = Boolean(data.stopped); const nextPublished = Boolean(data.published) && !nextStopped; const nextConfig = { ...state.config, courseName: data.course_name || '', courseCode: data.course_code || '', totalQuestions: Number(data.total_questions) || 0, duration: Number(data.duration) || 0, start: toDateTimeLocal(data.start_time), end: toDateTimeLocal(data.end_time) }; const changed = state.currentQuizId !== nextQuizId || state.quizStopped !== nextStopped || state.questionsPublished !== nextPublished || state.config.totalQuestions !== nextConfig.totalQuestions || state.config.duration !== nextConfig.duration || state.config.start !== nextConfig.start || state.config.end !== nextConfig.end; if (!changed) return; state.currentQuizId = nextQuizId; state.quizStopped = nextStopped; state.questionsPublished = nextPublished; state.config = nextConfig; if (teacherView === 'questions' || teacherView === 'overview') app(); }
 async function refreshStudentQuizStateRaw() {
   if (!session || session.role !== 'student') return;
@@ -992,7 +1016,7 @@ async function startStudentQuiz() {
   if (!Number.isFinite(Date.parse(session.deadlineAt || ''))) {
     session.deadlineAt = new Date(Date.now() + session.remaining * 1000).toISOString();
   }
-  void markStudentOnline(session.username, session.quizId);
+  markStudentSessionOnline(session);
   saveStudentSession({ localOnly: true });
   try {
     await flushStudentAttemptSave();
@@ -1213,11 +1237,12 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
       teacherDeadlineTimer = setInterval(() => { if (quizHasEnded()) void expireQuizDueToTime(); }, 1000);
     }
   }
-  if (session?.role === 'student' && !session.completed && session.started) {
-    studentHeartbeatTimer = setInterval(() => markStudentOnline(session.username, session.quizId), 5000);
+  if (session?.role === 'student') {
+    markStudentSessionOnline();
+    studentHeartbeatTimer = setInterval(() => markStudentSessionOnline(), 5000);
     if (!presenceWindowBound) {
-      document.addEventListener('visibilitychange', () => { if (!document.hidden && session?.role === 'student' && session.started) void markStudentOnline(session.username, session.quizId); });
-      window.addEventListener('focus', () => { if (session?.role === 'student' && session.started) void markStudentOnline(session.username, session.quizId); });
+      document.addEventListener('visibilitychange', () => { if (!document.hidden && session?.role === 'student') markStudentSessionOnline(); });
+      window.addEventListener('focus', () => { if (session?.role === 'student') markStudentSessionOnline(); });
       presenceWindowBound = true;
     }
   }
@@ -1510,7 +1535,7 @@ async function handleLogin(event) {
     }
     session.remaining = Math.max(0, Math.ceil((Date.parse(session.deadlineAt) - Date.now()) / 1000));
   }
-  void markStudentOnline(student.username, session.quizId);
+  markStudentSessionOnline(session);
   saveStudentSession();
   app();
 }
@@ -1564,7 +1589,7 @@ async function logout(localOnly = false, automatic = false) {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
       }
     }
-    void markStudentOffline(studentSession.username, studentSession.quizId);
+    markStudentSessionOffline(studentSession);
     state.users = state.users.map(user => user.username === studentSession.username
       ? { ...user, status: 'offline', lastSeen: new Date().toISOString() }
       : user);
@@ -1885,7 +1910,7 @@ async function updateSelectedStudentAccess(expectedActive) {
     }
     state.studentLoginActive = result.studentLoginActive;
     state.deactivatedStudentUsernames = result.deactivatedStudentUsernames;
-    if (!expectedActive) void markStudentsOffline(result.changedUsernames, state.currentQuizId);
+    if (!expectedActive) void markStudentsOffline(result.changedUsernames);
     if (result.activityItem) {
       state.activity = [result.activityItem, ...state.activity].slice(0, 20);
       saveState({ localOnly: true });
@@ -1913,7 +1938,7 @@ async function updateMasterStudentLoginAccess(event) {
   button.textContent = expectedState ? 'Activating...' : 'Deactivating...';
   document.querySelectorAll('.student-account-actions button, [data-action="select-student-account"]').forEach(control => { control.disabled = true; });
   try {
-    if (!expectedState) void markStudentsOffline(state.importedFile.usernames || [], state.currentQuizId);
+    if (!expectedState) void markStudentsOffline(state.importedFile.usernames || []);
     const result = await persistStudentAccessChange({
       masterState: expectedState,
       activityText: `Uploaded student login ${expectedState ? 'activated' : 'deactivated'}`
@@ -1935,7 +1960,7 @@ async function updateMasterStudentLoginAccess(event) {
 }
 async function importUsers(event) { const file = event.target.files[0]; if (!file || !window.XLSX || state.studentLoginActive) return; const previousState = structuredClone(state); teacherMutationInFlight = true; try { const buffer = await file.arrayBuffer(); const workbook = XLSX.read(buffer, { type: 'array' }); const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 }); const validation = validateCredentialRows(rows); if (validation.error || !validation.credentials.length) { event.target.value = ''; showToast(validation.error || 'The workbook contains no student credentials.'); return; } removeImportedUsers(); const importedUsernames = []; validation.credentials.forEach(({ username, password }) => { state.users.push({ username, password, status: 'offline', lastSeen: null }); importedUsernames.push(username); }); state.importedFile = { name: file.name, count: validation.credentials.length, uploadedAt: new Date().toISOString(), usernames: importedUsernames }; state.studentLoginActive = false; saveState({ workspaceOnly: true }); addActivity(`${validation.credentials.length} student account${validation.credentials.length === 1 ? '' : 's'} imported`, 'users'); await persistWorkspaceChange(() => confirmImportedFile(state.importedFile)); showToast(`${validation.credentials.length} student account${validation.credentials.length === 1 ? '' : 's'} imported.`); app(); } catch (error) { restoreState(previousState); showToast(`Workbook import could not be saved: ${error.message || error}`); } finally { teacherMutationInFlight = false; } }
 function removeImportedUsers() { const usernames = new Set(state.importedFile?.usernames || []); if (usernames.size) state.users = state.users.filter(user => !usernames.has(user.username)); state.importedFile = null; state.studentLoginActive = false; state.deactivatedStudentUsernames = []; selectedStudentUsernames.clear(); }
-async function deleteUploadedFile() { if (state.studentLoginActive || teacherMutationInFlight) return; const previousState = structuredClone(state); teacherMutationInFlight = true; try { const usernames = state.importedFile?.usernames || []; await markStudentsOffline(usernames, state.currentQuizId); removeImportedUsers(); saveState({ workspaceOnly: true }); addActivity('The uploaded student workbook was deleted', 'users'); await persistWorkspaceChange(confirmImportedFileDeleted); showToast('Uploaded file removed.'); app(); } catch (error) { restoreState(previousState); showToast(`Uploaded file could not be deleted: ${error.message || error}`); } finally { teacherMutationInFlight = false; } }
+async function deleteUploadedFile() { if (state.studentLoginActive || teacherMutationInFlight) return; const previousState = structuredClone(state); teacherMutationInFlight = true; try { const usernames = state.importedFile?.usernames || []; await markStudentsOffline(usernames); removeImportedUsers(); saveState({ workspaceOnly: true }); addActivity('The uploaded student workbook was deleted', 'users'); await persistWorkspaceChange(confirmImportedFileDeleted); showToast('Uploaded file removed.'); app(); } catch (error) { restoreState(previousState); showToast(`Uploaded file could not be deleted: ${error.message || error}`); } finally { teacherMutationInFlight = false; app(); } }
 async function toggleStudentLoginActivation() { if (!state.importedFile || teacherMutationInFlight) return; const previousState = structuredClone(state); teacherMutationInFlight = true; try { state.studentLoginActive = !state.studentLoginActive; const expectedState = state.studentLoginActive; if (!expectedState) await markStudentsOffline(state.importedFile.usernames || [], state.currentQuizId); saveState({ workspaceOnly: true }); addActivity(`Uploaded student login ${expectedState ? 'activated' : 'deactivated'}`, 'users'); await persistWorkspaceChange(() => confirmStudentLoginState(expectedState)); showToast(expectedState ? 'Uploaded credentials are now active.' : 'Uploaded credentials are inactive. All imported students were signed out.'); app(); } catch (error) { restoreState(previousState); showToast(`Student login status could not be saved: ${error.message || error}`); } finally { teacherMutationInFlight = false; } }
 const toggleStudentLoginActivationHandler = toggleStudentLoginActivation;
 toggleStudentLoginActivation = async function(event) {

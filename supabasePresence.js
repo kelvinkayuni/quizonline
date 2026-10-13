@@ -3,6 +3,7 @@ import { supabase } from './supabase.js';
 const PRESENCE_TIMEOUT_MS = 30000;
 
 export async function markStudentOnline(username, quizId) {
+  if (!username || !quizId) return;
   const { error } = await supabase.from('quiz_presence').upsert({
     username,
     quiz_id: quizId,
@@ -13,6 +14,7 @@ export async function markStudentOnline(username, quizId) {
 }
 
 export async function markStudentOffline(username, quizId) {
+  if (!username || !quizId) return;
   const { error } = await supabase
     .from('quiz_presence')
     .update({ online: false, last_seen: new Date().toISOString() })
@@ -21,21 +23,21 @@ export async function markStudentOffline(username, quizId) {
   if (error) console.warn('Could not mark student offline.', error);
 }
 
-export async function markStudentsOffline(usernames, quizId) {
-  if (!usernames?.length || !quizId) return;
-  const { error } = await supabase
+export async function markStudentsOffline(usernames, quizId = null) {
+  if (!usernames?.length) return;
+  let request = supabase
     .from('quiz_presence')
     .update({ online: false, last_seen: new Date().toISOString() })
-    .in('username', usernames)
-    .eq('quiz_id', quizId);
+    .in('username', usernames);
+  if (quizId) request = request.eq('quiz_id', quizId);
+  const { error } = await request;
   if (error) console.warn('Could not clear student presence.', error);
 }
 
-export async function loadLiveStudentUsernames(quizId) {
+export async function loadLiveStudentUsernames() {
   const { data, error } = await supabase
     .from('quiz_presence')
     .select('username, last_seen, online')
-    .eq('quiz_id', quizId)
     .eq('online', true);
 
   if (error) {
