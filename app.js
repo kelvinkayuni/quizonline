@@ -767,7 +767,7 @@ function resultFileSelectionPanel() {
   const availableFileIds = new Set(state.resultFiles.map(file => file.id));
   for (const fileId of selectedResultFileIds) if (!availableFileIds.has(fileId)) selectedResultFileIds.delete(fileId);
   const selectedCount = state.resultFiles.filter(file => selectedResultFileIds.has(file.id)).length;
-  return `<section class="card panel result-file-selection-panel"><div class="panel-head"><div><h2>Select result files</h2><p class="subtle">Selected files and their associated quiz attempts will be deleted.</p></div><button type="button" class="btn btn-coral btn-small" data-action="delete-selected-result-files" ${selectedCount && !teacherMutationInFlight ? '' : 'disabled'}>${teacherMutationInFlight ? 'Deleting selected...' : `Delete selected (${selectedCount})`}</button></div><div class="result-file-selection-list">${state.resultFiles.map(file => `<label class="result-file-choice"><input type="checkbox" data-action="select-result-file" data-file-id="${esc(file.id)}" aria-label="Select ${esc(file.name)}" ${selectedResultFileIds.has(file.id) ? 'checked' : ''} ${teacherMutationInFlight ? 'disabled' : ''}><span><strong>${esc(file.name)}</strong><span class="subtle">${formatDate(file.createdAt)} · ${(file.rows || []).length} results</span></span></label>`).join('')}</div></section>`;
+  return `<div class="result-file-selection-control"><details class="result-file-select-menu"><summary data-action="result-file-selection-summary">Select result files (${selectedCount} selected)</summary><div class="result-file-select-options">${state.resultFiles.map(file => `<label class="result-file-choice"><input type="checkbox" data-action="select-result-file" data-file-id="${esc(file.id)}" aria-label="Select ${esc(file.name)}" ${selectedResultFileIds.has(file.id) ? 'checked' : ''} ${teacherMutationInFlight ? 'disabled' : ''}><span><strong>${esc(file.name)}</strong><span class="subtle">${formatDate(file.createdAt)} · ${(file.rows || []).length} results</span></span></label>`).join('')}</div></details><button type="button" class="btn btn-coral btn-small" data-action="delete-selected-result-files" ${selectedCount > 1 && !teacherMutationInFlight ? '' : 'disabled'}>${teacherMutationInFlight ? 'Deleting selected...' : `Delete selected (${selectedCount})`}</button></div>`;
 }
 function updateBulkDeletionButtons() {
   const archiveCount = teacherQuestionHistory.filter(item => selectedQuestionHistoryIds.has(item.quiz_id)).length;
@@ -776,8 +776,10 @@ function updateBulkDeletionButtons() {
     button.textContent = teacherMutationInFlight ? 'Deleting selected...' : `Delete selected (${archiveCount})`;
   });
   const fileCount = state.resultFiles.filter(file => selectedResultFileIds.has(file.id)).length;
+  const selectionSummary = document.querySelector('[data-action="result-file-selection-summary"]');
+  if (selectionSummary) selectionSummary.textContent = `Select result files (${fileCount} selected)`;
   document.querySelectorAll('[data-action="delete-selected-result-files"]').forEach(button => {
-    button.disabled = teacherMutationInFlight || !fileCount;
+    button.disabled = teacherMutationInFlight || fileCount < 2;
     button.textContent = teacherMutationInFlight ? 'Deleting selected...' : `Delete selected (${fileCount})`;
   });
 }
@@ -1782,7 +1784,7 @@ async function deleteSelectedResultFile() { const file = state.resultFiles.find(
 async function deleteSelectedResultFiles() {
   if (teacherMutationInFlight) return;
   const selectedFiles = state.resultFiles.filter(file => selectedResultFileIds.has(file.id));
-  if (!selectedFiles.length) return;
+  if (selectedFiles.length < 2) return showToast('Select at least two result files to use bulk delete.');
   const quizIds = [...new Set(selectedFiles.flatMap(resultFileQuizIds))];
   const attemptNote = quizIds.length ? ` and their ${quizIds.length} associated quiz attempt${quizIds.length === 1 ? '' : 's'}` : '';
   if (!window.confirm(`Permanently delete ${selectedFiles.length} selected result file${selectedFiles.length === 1 ? '' : 's'}${attemptNote}?`)) return;

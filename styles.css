@@ -107,12 +107,18 @@ tr:last-child td { border: 0; }
 .result-history-toolbar .file-selector { flex: 1; }
 .result-history-toolbar .empty { flex: 1; text-align: left; }
 .result-history-toolbar > button { flex: 0 0 auto; margin-top: 22px; }
-.result-file-selection-panel { margin-top: 17px; }
-.result-file-selection-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 8px; max-height: 260px; overflow: auto; }
+.result-file-selection-control { position: relative; z-index: 3; display: flex; align-items: flex-start; justify-content: flex-end; gap: 8px; margin: 10px 0 17px; }
+.result-file-select-menu { position: relative; }
+.result-file-select-menu summary { padding: 9px 12px; border: 1px solid var(--line); border-radius: 6px; background: #fbfaf5; color: var(--ink); cursor: pointer; list-style: none; font-size: 12px; }
+.result-file-select-menu summary::-webkit-details-marker { display: none; }
+.result-file-select-menu summary::after { margin-left: 12px; content: '▾'; color: var(--muted); }
+.result-file-select-menu[open] summary::after { content: '▴'; }
+.result-file-select-options { position: absolute; top: calc(100% + 5px); right: 0; display: grid; width: min(360px, calc(100vw - 32px)); max-height: 340px; gap: 6px; overflow: auto; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; box-shadow: 0 8px 24px rgba(25, 45, 39, .16); }
 .result-file-choice { display: flex; align-items: flex-start; gap: 10px; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: #fbfaf5; cursor: pointer; }
 .result-file-choice input, .quiz-question-history-select input { flex: 0 0 auto; margin-top: 3px; }
 .result-file-choice > span { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
 .quiz-question-history-select { display: inline-flex; align-items: center; }
+@media (max-width: 620px) { .result-file-selection-control { align-items: stretch; justify-content: space-between; } .result-file-select-menu { min-width: 0; } .result-file-select-menu summary { max-width: calc(100vw - 175px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } }
 @media (max-width: 620px) { .result-history-toolbar { align-items: stretch; flex-direction: column; } .result-history-toolbar > button { align-self: flex-end; margin-top: 0; } }
 .login-page { display: grid; grid-template-columns: minmax(320px, .8fr) 1.2fr; min-height: 100vh; background: var(--paper); }
 .login-art { display: flex; flex-direction: column; justify-content: space-between; padding: 46px 6vw; background: #1d403d; color: white; overflow: hidden; position: relative; }
