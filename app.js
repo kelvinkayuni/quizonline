@@ -481,6 +481,18 @@ async function refreshStudentQuizStateRaw() {
   const previousQuizId = state.currentQuizId;
   const previousStopped = state.quizStopped;
   const previousPublished = state.questionsPublished;
+  const expectedSnapshotQuizId = config?.quiz_id ?? null;
+  const publishedQuestionOrders = workspace.currentQuizQuestions?.quizId === expectedSnapshotQuizId
+    && workspace.currentQuizQuestions.studentQuestionOrders
+    && typeof workspace.currentQuizQuestions.studentQuestionOrders === 'object'
+    ? workspace.currentQuizQuestions.studentQuestionOrders
+    : {};
+  state.studentQuestionOrders = {
+    ...(workspace.studentQuestionOrders && typeof workspace.studentQuestionOrders === 'object'
+      ? workspace.studentQuestionOrders
+      : state.studentQuestionOrders),
+    ...publishedQuestionOrders
+  };
   const previousQuestionCount = state.questions.length;
   const previousHistoryCount = state.studentHistory.length;
   const deletedQuizIds = new Set([
