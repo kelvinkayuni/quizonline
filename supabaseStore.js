@@ -958,7 +958,7 @@ export async function persistStudentAccessChange({ masterState = null, usernames
     if (writeError) throw writeError;
     if (!saved?.data) continue;
 
-    const savedWorkspace = saved.data.data || {};
+    const savedWorkspace = saved.data || {};
     const savedDeactivated = new Set(savedWorkspace.deactivatedStudentUsernames || []);
     const deactivationMatches = savedDeactivated.size === deactivated.size
       && [...deactivated].every(username => savedDeactivated.has(username));
