@@ -4,6 +4,7 @@ import { supabase } from './supabase.js';
 import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, deleteTeacherQuizQuestionHistory, hydrateQuizState, listTeacherQuizQuestionHistory, loadStudentQuizReport, loadStudentQuizResult, loadTeacherQuizQuestionHistory, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt } from './supabaseStore.js';
 import { loadLiveStudentUsernames, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { SHORT_ANSWER_FULL_CREDIT_THRESHOLD, roundToOneDecimal, shortAnswerMarksAwarded, shortAnswerMatchScore } from './shortAnswerMatching.js';
+import { assignUniqueStudentQuestionOrders } from './studentQuestionOrders.js';
 let shortAnswerSubmissionInProgress = false;
 
 async function refreshStudentQuizState() {
@@ -379,7 +380,39 @@ window.addEventListener('storage', event => {
 });
 window.addEventListener('supabase-sync-error', event => { const operation = event.detail?.operation || 'synchronization'; const message = event.detail?.error?.message || 'Check your Supabase table policies and network connection.'; showToast(`Supabase ${operation} failed: ${message}`, 'error'); });
 function icon(name) { return ({ grid: '▦', question: '?', settings: '⚙', users: '♙', results: '↗', logout: '↪', plus: '+', upload: '↑', download: '↓', clock: '◷', check: '✓', pulse: '◉', book: '▤' }[name] || '•'); }
-function ensureStudentQuestionOrder() { if (!session || session.role !== 'student' || !state.currentQuizId || !state.questions.length) return; if (session.started && session.questionOrder?.length) { state.questions = session.questionOrder; return; } const storedOrder = state.studentQuestionOrders[session.username]; const storedQuestions = storedOrder?.quizId === state.currentQuizId ? storedOrder.questionIds.map(id => state.questions.find(question => question.id === id)).filter(Boolean) : []; const questionOrder = storedQuestions.length === state.questions.length ? storedQuestions : shuffleQuestions(state.questions, session.username); state.studentQuestionOrders[session.username] = { quizId: state.currentQuizId, questionIds: questionOrder.map(question => question.id) }; state.questions = questionOrder; session.questionOrder = questionOrder; saveStudentSession(); }
+function assignedStudentQuestionOrder(username, quizId, questions = state.questions) {
+  const assignment = state.studentQuestionOrders?.[username];
+  if (assignment?.quizId !== quizId || !Array.isArray(assignment.questionIds)) return [];
+  const questionsById = new Map(questions.map(question => [String(question.id), question]));
+  const order = assignment.questionIds.map(id => questionsById.get(String(id))).filter(Boolean);
+  return order.length === questions.length ? order : [];
+}
+function hasUniqueStudentQuestionOrders(quizId) {
+  return Object.values(state.studentQuestionOrders || {}).some(assignment => assignment?.quizId === quizId);
+}
+function ensureStudentQuestionOrder() {
+  if (!session || session.role !== 'student' || !state.currentQuizId || !state.questions.length) return;
+  if (session.started && session.questionOrder?.length) {
+    state.questions = session.questionOrder;
+    return;
+  }
+  const storedOrder = state.studentQuestionOrders[session.username];
+  const assignedOrder = assignedStudentQuestionOrder(session.username, state.currentQuizId);
+  const assignmentsExist = hasUniqueStudentQuestionOrders(state.currentQuizId);
+  if (assignmentsExist && assignedOrder.length !== state.questions.length) return;
+  const storedQuestions = storedOrder?.quizId === state.currentQuizId
+    ? storedOrder.questionIds.map(id => state.questions.find(question => question.id === id)).filter(Boolean)
+    : [];
+  const questionOrder = assignedOrder.length === state.questions.length
+    ? assignedOrder
+    : storedQuestions.length === state.questions.length
+      ? storedQuestions
+      : shuffleQuestions(state.questions, session.username);
+  state.studentQuestionOrders[session.username] = { quizId: state.currentQuizId, questionIds: questionOrder.map(question => question.id) };
+  state.questions = questionOrder;
+  session.questionOrder = questionOrder;
+  saveStudentSession();
+}
 function app() { if (session && !stateHydrated) { document.querySelector('#app').innerHTML = '<main class="main"><div class="quiz-shell"><section class="card result-hero"><div class="eyebrow kicker">Connecting</div><h2>Loading the current workspace...</h2></section></div></main>'; return; } ensureStudentQuestionOrder(); document.querySelector('#app').innerHTML = session ? (session.role === 'teacher' ? teacherApp() : (session.completed ? studentApp() : (session.started ? studentApp() : studentQuizLobby()))) : loginApp(); saveWindowSession(); restoreTeacherDrafts(); bindEvents(); }
 function clearStudentAttemptClaim() {
   session.attemptGeneration = null;
@@ -751,6 +784,10 @@ async function startStudentQuiz() {
   if (quizHasEnded()) return showToast('This quiz has ended.');
   if (!state.questionsPublished) return showToast('The teacher has not submitted a quiz yet.');
   if (!state.currentQuizId || session.quizId !== state.currentQuizId) return showToast('This quiz is not available in your current session.');
+  if (hasUniqueStudentQuestionOrders(state.currentQuizId)
+    && assignedStudentQuestionOrder(session.username, state.currentQuizId).length !== state.questions.length) {
+    return showToast('No unique question order is assigned to this account. Ask the teacher to update the student roster and submit the quiz again.', 'error');
+  }
   if (session.attemptGeneration == null || session.attemptRevision == null || !session.attemptOwnerToken) {
     try {
       const studentAccount = state.users.find(user => user.username === session.username);
@@ -887,10 +924,23 @@ async function publishQuestionsForStudents() {
   if (!state.config.totalQuestions || !state.config.duration) return showToast('Save quiz configuration before submitting questions.');
   if (quizHasEnded()) return showToast('The quiz end time has passed. Update Quiz configuration, then submit again.');
 
+  const submittedQuizId = `quiz-${Date.now()}`;
+  let studentQuestionOrders;
+  try {
+    studentQuestionOrders = assignUniqueStudentQuestionOrders(
+      state.questions,
+      state.users.map(user => user.username),
+      Math.min(state.config.totalQuestions || state.questions.length, state.questions.length),
+      submittedQuizId
+    );
+  } catch (error) {
+    return showToast(`Quiz could not be submitted: ${error.message || error}`, 'error');
+  }
+
+  state.studentQuestionOrders = studentQuestionOrders;
   state.questionsPublished = true;
   state.quizStopped = false;
-  state.currentQuizId = `quiz-${Date.now()}`;
-  const submittedQuizId = state.currentQuizId;
+  state.currentQuizId = submittedQuizId;
   state.publishConfirmationPending = submittedQuizId;
   state.studentSessions = {};
   state.healthClearedAt = null;
@@ -1133,14 +1183,23 @@ async function handleLogin(event) {
   }
   let savedSession = state.studentSessions[student.username];
   const originalQuestions = state.questions;
-  const localQuestionOrder = savedSession?.questionOrder?.length
+  const savedOrderBelongsToQuiz = savedSession?.quizId === state.currentQuizId;
+  const localQuestionOrder = savedOrderBelongsToQuiz && savedSession?.questionOrder?.length
     ? savedSession.questionOrder
     : Array.isArray(savedSession?.questionOrderIds)
+      && savedOrderBelongsToQuiz
       ? savedSession.questionOrderIds.map(id => originalQuestions.find(question => question.id === id)).filter(Boolean)
       : [];
-  const initialQuestionOrder = localQuestionOrder.length === originalQuestions.length
-    ? localQuestionOrder
-    : shuffleQuestions(originalQuestions, username);
+  const assignedOrder = assignedStudentQuestionOrder(username, state.currentQuizId, originalQuestions);
+  const assignmentsExist = hasUniqueStudentQuestionOrders(state.currentQuizId);
+  if (assignmentsExist && assignedOrder.length !== originalQuestions.length) {
+    return showToast('No unique question order is assigned to this account. Ask the teacher to update the student roster and submit the quiz again.', 'error');
+  }
+  const initialQuestionOrder = assignedOrder.length === originalQuestions.length
+    ? assignedOrder
+    : localQuestionOrder.length === originalQuestions.length
+      ? localQuestionOrder
+      : shuffleQuestions(originalQuestions, username);
   const initialSession = savedSession?.quizId === state.currentQuizId
     ? { ...savedSession, username: student.username, questionOrder: initialQuestionOrder }
     : {
@@ -2064,6 +2123,16 @@ refreshStudentQuizStateRaw = async function refreshQuestionTypesForStudent() {
   }
   if (snapshot?.quizId !== state.currentQuizId || !Array.isArray(snapshot?.questions)) {
     return;
+  }
+  if (snapshot.studentQuestionOrders && typeof snapshot.studentQuestionOrders === 'object') {
+    state.studentQuestionOrders = { ...state.studentQuestionOrders, ...snapshot.studentQuestionOrders };
+    const assignedOrder = assignedStudentQuestionOrder(session?.username, state.currentQuizId);
+    if (session?.role === 'student' && !session.started && assignedOrder.length === state.questions.length) {
+      session.questionOrder = assignedOrder;
+      state.questions = assignedOrder;
+      saveStudentSession({ localOnly: true });
+      app();
+    }
   }
   state.questions = session?.started && Array.isArray(session.questionOrder)
     ? session.questionOrder

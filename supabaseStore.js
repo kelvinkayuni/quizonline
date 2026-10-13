@@ -29,8 +29,9 @@ function attemptDataFromSession(studentSession) {
     if (!answer) return [];
     const marksPossible = roundToOneDecimal(Number(question.marks) || 0);
     const savedMarks = Number(answer.marksAwarded);
+    const boundedMarks = Math.min(marksPossible, Math.max(0, savedMarks));
     const marksAwarded = Number.isFinite(savedMarks)
-      ? roundToOneDecimal(Math.min(marksPossible, Math.max(0, savedMarks)))
+      ? roundToOneDecimal(boundedMarks)
       : answer.correct ? marksPossible : 0;
     const selectedIndex = answer.selected == null ? NaN : Number(answer.selected);
     const studentAnswer = question.type === 'short-answer'
@@ -369,7 +370,10 @@ export async function publishQuizAtomically(state, quizId) {
       },
       p_question_snapshot: {
         quizId,
-        questions: state.questions.map(questionForWorkspace)
+        questions: state.questions.map(questionForWorkspace),
+        studentQuestionOrders: Object.fromEntries(
+          Object.entries(state.studentQuestionOrders || {}).filter(([, assignment]) => assignment?.quizId === quizId)
+        )
       }
     }),
     'Atomic quiz publication'
@@ -592,6 +596,11 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true, 
     const previousConfigResetAt = state.configResetAt || '';
     const storedResultFiles = Array.isArray(workspace.resultFiles) ? workspace.resultFiles : [];
     const cleanedResultFiles = storedResultFiles.map(({ questions, ...file }) => file);
+    const publishedQuestionOrders = workspaceQuestionSnapshot?.quizId === expectedSnapshotQuizId
+      && workspaceQuestionSnapshot.studentQuestionOrders
+      && typeof workspaceQuestionSnapshot.studentQuestionOrders === 'object'
+      ? workspaceQuestionSnapshot.studentQuestionOrders
+      : {};
     state.users = Array.isArray(workspace.users) ? workspace.users : state.users;
     if (!configResult.data) {
       state.config.courseName = cleanCourseValue(workspace.courseName || state.config.courseName || '', 'Course');
@@ -599,7 +608,10 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true, 
     }
     state.importedFile = workspace.importedFile || null;
     state.studentLoginActive = Boolean(workspace.studentLoginActive);
-    state.studentQuestionOrders = workspace.studentQuestionOrders && typeof workspace.studentQuestionOrders === 'object' ? workspace.studentQuestionOrders : state.studentQuestionOrders;
+    state.studentQuestionOrders = {
+      ...(workspace.studentQuestionOrders && typeof workspace.studentQuestionOrders === 'object' ? workspace.studentQuestionOrders : state.studentQuestionOrders),
+      ...publishedQuestionOrders
+    };
     state.configSaved = configResult.data
       ? Boolean(Number(configResult.data.duration) || configResult.data.start_time || configResult.data.end_time)
       : Boolean(workspace.configSaved);
