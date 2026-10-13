@@ -826,10 +826,10 @@ function updateSelectedStudentAccountControls() {
   let message = '';
   if (state.importedFile && !state.studentLoginActive) {
     message = 'Activate workbook-wide student login before changing individual account access.';
-  } else if (canManageStudents && wouldDeactivateAll) {
-    message = 'Keep at least one individual account active. Use the workbook-wide switch to deactivate everyone.';
   } else if (selectedActiveCount && selectedDeactivatedCount) {
     message = 'Select only active or only deactivated accounts for each action.';
+  } else if (canManageStudents && wouldDeactivateAll) {
+    message = 'Keep at least one individual account active. Use the workbook-wide switch to deactivate everyone.';
   }
   if (message && actions) {
     if (!hint) {
