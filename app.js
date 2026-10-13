@@ -1193,6 +1193,29 @@ async function handleLogin(event) {
     app();
     return;
   }
+  const loginButton = event.submitter || event.target.querySelector('button[type="submit"]');
+  const originalLoginLabel = loginButton?.textContent;
+  if (loginButton) {
+    loginButton.disabled = true;
+    loginButton.textContent = 'Checking accounts...';
+  }
+  try {
+    const { data, error } = await supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle();
+    if (error) throw error;
+    const workspace = data?.data || {};
+    state.importedFile = workspace.importedFile || null;
+    state.studentLoginActive = Boolean(workspace.studentLoginActive);
+    if (Array.isArray(workspace.users)) state.users = workspace.users;
+    saveState({ localOnly: true });
+  } catch (error) {
+    showToast(`Student account status could not be checked: ${error.message || error}`, 'error');
+    return;
+  } finally {
+    if (loginButton?.isConnected) {
+      loginButton.disabled = false;
+      loginButton.textContent = originalLoginLabel || 'Sign in →';
+    }
+  }
   const importedUsername = state.importedFile?.usernames?.find(item => item === username);
   const student = state.studentLoginActive && state.importedFile && importedUsername
     ? state.users.find(user => user.username === importedUsername && user.password === password)
