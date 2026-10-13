@@ -428,7 +428,20 @@ function ensureStudentQuestionOrder() {
   session.questionOrder = questionOrder;
   saveStudentSession();
 }
-function app() { if (session && !stateHydrated) { document.querySelector('#app').innerHTML = '<main class="main"><div class="quiz-shell"><section class="card result-hero"><div class="eyebrow kicker">Connecting</div><h2>Loading the current workspace...</h2></section></div></main>'; return; } ensureStudentQuestionOrder(); document.querySelector('#app').innerHTML = session ? (session.role === 'teacher' ? teacherApp() : (session.completed ? studentApp() : (session.started ? studentApp() : studentQuizLobby()))) : loginApp(); saveWindowSession(); restoreTeacherDrafts(); bindEvents(); }
+function app() {
+  if (session && !stateHydrated) {
+    document.querySelector('#app').innerHTML = '<main class="main"><div class="quiz-shell"><section class="card result-hero"><div class="eyebrow">Connecting</div><h2>Loading the current workspace...</h2></section></div></main>';
+    return;
+  }
+  ensureStudentQuestionOrder();
+  document.querySelector('#app').innerHTML = session
+    ? (session.role === 'teacher' ? teacherApp() : (session.completed ? studentApp() : (session.started ? studentApp() : studentQuizLobby())))
+    : loginApp();
+  saveWindowSession();
+  restoreTeacherDrafts();
+  bindEvents();
+  updateSelectedStudentAccountControls();
+}
 function clearStudentAttemptClaim() {
   session.attemptGeneration = null;
   session.attemptRevision = null;
@@ -788,12 +801,42 @@ function updateBulkDeletionButtons() {
   });
 }
 function updateSelectedStudentAccountControls() {
-  const selectedCount = state.users.filter(user => selectedStudentUsernames.has(user.username)).length;
+  const importedUsernames = new Set(state.importedFile?.usernames || []);
+  const importedUsers = state.users.filter(user => importedUsernames.has(user.username));
+  const deactivated = new Set(state.deactivatedStudentUsernames || []);
+  const activeUsers = importedUsers.filter(user => !deactivated.has(user.username));
+  const selectedUsers = importedUsers.filter(user => selectedStudentUsernames.has(user.username));
+  const selectedActiveCount = selectedUsers.filter(user => !deactivated.has(user.username)).length;
+  const selectedDeactivatedCount = selectedUsers.length - selectedActiveCount;
+  const canManageStudents = Boolean(state.studentLoginActive && state.importedFile);
+  const wouldDeactivateAll = activeUsers.length > 0 && selectedActiveCount >= activeUsers.length;
   const countLabel = document.querySelector('.student-account-actions .subtle');
-  if (countLabel) countLabel.textContent = `${selectedCount} selected`;
-  document.querySelectorAll('[data-action="activate-selected-students"], [data-action="deactivate-selected-students"]').forEach(button => {
-    button.disabled = teacherMutationInFlight || !selectedCount;
+  if (countLabel) countLabel.textContent = `${selectedUsers.length} selected`;
+  document.querySelectorAll('[data-action="select-student-account"]').forEach(checkbox => {
+    checkbox.disabled = teacherMutationInFlight || !canManageStudents;
   });
+  const activateButton = document.querySelector('[data-action="activate-selected-students"]');
+  if (activateButton) activateButton.disabled = teacherMutationInFlight || !canManageStudents || !selectedDeactivatedCount;
+  const deactivateButton = document.querySelector('[data-action="deactivate-selected-students"]');
+  if (deactivateButton) deactivateButton.disabled = teacherMutationInFlight || !canManageStudents || !selectedActiveCount || wouldDeactivateAll;
+  const actions = document.querySelector('.student-account-actions');
+  let hint = document.querySelector('.student-access-selection-hint');
+  let message = '';
+  if (state.importedFile && !state.studentLoginActive) {
+    message = 'Activate workbook-wide student login before changing individual account access.';
+  } else if (canManageStudents && wouldDeactivateAll) {
+    message = 'Keep at least one individual account active. Use the workbook-wide switch to deactivate everyone.';
+  }
+  if (message && actions) {
+    if (!hint) {
+      hint = document.createElement('p');
+      hint.className = 'subtle student-access-selection-hint';
+      actions.insertAdjacentElement('afterend', hint);
+    }
+    hint.textContent = message;
+  } else {
+    hint?.remove();
+  }
 }
 document.addEventListener('change', event => {
   const checkbox = event.target;
@@ -1792,6 +1835,9 @@ async function confirmStudentAccessState(usernames, expectedActive) {
 }
 async function updateSelectedStudentAccess(expectedActive) {
   if (!state.importedFile || teacherMutationInFlight) return;
+  if (!state.studentLoginActive) {
+    return showToast('Activate workbook-wide student login before changing individual account access.');
+  }
   const importedUsernames = new Set(state.importedFile.usernames || []);
   const usernames = state.users
     .map(user => user.username)
@@ -1808,6 +1854,12 @@ async function updateSelectedStudentAccess(expectedActive) {
     if (!changedUsernames.length) {
       selectedStudentUsernames.clear();
       showToast(`All selected student accounts are already ${expectedActive ? 'active' : 'deactivated'}.`);
+      return;
+    }
+    const activeUserCount = state.users.filter(user => importedUsernames.has(user.username) && !deactivated.has(user.username)).length;
+    if (!expectedActive && changedUsernames.length >= activeUserCount) {
+      selectedStudentUsernames = previousSelection;
+      showToast('Keep at least one individual account active. Use the workbook-wide switch to deactivate everyone.');
       return;
     }
     const nextDeactivated = new Set(deactivated);
