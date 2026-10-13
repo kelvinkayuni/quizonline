@@ -1699,6 +1699,36 @@ async function clearResultFileHistory() {
     app();
   }
 }
+const deleteUploadedFileHandler = deleteUploadedFile;
+deleteUploadedFile = async function(event) {
+  if (state.studentLoginActive || teacherMutationInFlight) return;
+  const button = event.currentTarget;
+  button.disabled = true;
+  button.textContent = 'Deleting file...';
+  await deleteUploadedFileHandler(event);
+  if (button.isConnected) app();
+};
+const deleteSelectedResultFileHandler = deleteSelectedResultFile;
+deleteSelectedResultFile = async function(event) {
+  const file = state.resultFiles.find(item => item.id === selectedResultFileId) || state.resultFiles[0];
+  if (!file || teacherMutationInFlight) return;
+  const button = event.currentTarget;
+  button.disabled = true;
+  button.textContent = 'Deleting selected...';
+  await deleteSelectedResultFileHandler(event);
+  if (button.isConnected) app();
+};
+const clearResultFileHistoryHandler = clearResultFileHistory;
+clearResultFileHistory = async function(event) {
+  if ((!state.resultFiles.length && !state.results.length) || teacherMutationInFlight) return;
+  const quizIds = new Set([...state.resultFiles.flatMap(resultFileQuizIds), ...state.results.map(result => result.quizId)].filter(Boolean));
+  if (!quizIds.size) return clearResultFileHistoryHandler(event);
+  const button = event.currentTarget;
+  button.disabled = true;
+  button.textContent = 'Clearing history...';
+  await clearResultFileHistoryHandler(event);
+  if (button.isConnected) app();
+};
 function clearAssessmentHealth() { if (!healthResults().length) return; state.healthClearedAt = new Date().toISOString(); saveState(); addActivity('Assessment health metrics were cleared', 'results'); showToast('Assessment health cleared. Result files are still available.'); app(); }
 let activityClearInFlight = false;
 async function clearRecentActivity() {
