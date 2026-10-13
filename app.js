@@ -808,6 +808,8 @@ function updateSelectedStudentAccountControls() {
   const selectedUsers = importedUsers.filter(user => selectedStudentUsernames.has(user.username));
   const selectedActiveCount = selectedUsers.filter(user => !deactivated.has(user.username)).length;
   const selectedDeactivatedCount = selectedUsers.length - selectedActiveCount;
+  const selectedAllActive = selectedUsers.length > 0 && selectedActiveCount === selectedUsers.length;
+  const selectedAllDeactivated = selectedUsers.length > 0 && selectedDeactivatedCount === selectedUsers.length;
   const canManageStudents = Boolean(state.studentLoginActive && state.importedFile);
   const wouldDeactivateAll = activeUsers.length > 0 && selectedActiveCount >= activeUsers.length;
   const countLabel = document.querySelector('.student-account-actions .subtle');
@@ -816,9 +818,9 @@ function updateSelectedStudentAccountControls() {
     checkbox.disabled = teacherMutationInFlight || !canManageStudents;
   });
   const activateButton = document.querySelector('[data-action="activate-selected-students"]');
-  if (activateButton) activateButton.disabled = teacherMutationInFlight || !canManageStudents || !selectedDeactivatedCount;
+  if (activateButton) activateButton.disabled = teacherMutationInFlight || !canManageStudents || !selectedAllDeactivated;
   const deactivateButton = document.querySelector('[data-action="deactivate-selected-students"]');
-  if (deactivateButton) deactivateButton.disabled = teacherMutationInFlight || !canManageStudents || !selectedActiveCount || wouldDeactivateAll;
+  if (deactivateButton) deactivateButton.disabled = teacherMutationInFlight || !canManageStudents || !selectedAllActive || wouldDeactivateAll;
   const actions = document.querySelector('.student-account-actions');
   let hint = document.querySelector('.student-access-selection-hint');
   let message = '';
@@ -826,6 +828,8 @@ function updateSelectedStudentAccountControls() {
     message = 'Activate workbook-wide student login before changing individual account access.';
   } else if (canManageStudents && wouldDeactivateAll) {
     message = 'Keep at least one individual account active. Use the workbook-wide switch to deactivate everyone.';
+  } else if (selectedActiveCount && selectedDeactivatedCount) {
+    message = 'Select only active or only deactivated accounts for each action.';
   }
   if (message && actions) {
     if (!hint) {
@@ -1843,23 +1847,24 @@ async function updateSelectedStudentAccess(expectedActive) {
     .map(user => user.username)
     .filter(username => importedUsernames.has(username) && selectedStudentUsernames.has(username));
   if (!usernames.length) return;
+  const deactivated = new Set(state.deactivatedStudentUsernames || []);
+  if (usernames.some(username => deactivated.has(username) !== expectedActive)) {
+    return showToast(`Select only ${expectedActive ? 'deactivated' : 'active'} student accounts for this action.`);
+  }
+  const activeUserCount = state.users.filter(user => importedUsernames.has(user.username) && !deactivated.has(user.username)).length;
+  if (!expectedActive && usernames.length >= activeUserCount) {
+    return showToast('Keep at least one individual account active. Use the workbook-wide switch to deactivate everyone.');
+  }
   const previousState = structuredClone(state);
   const previousSelection = new Set(selectedStudentUsernames);
   teacherMutationInFlight = true;
   teacherWorkspaceMutationVersion++;
   app();
   try {
-    const deactivated = new Set(state.deactivatedStudentUsernames || []);
     const changedUsernames = usernames.filter(username => deactivated.has(username) === expectedActive);
     if (!changedUsernames.length) {
       selectedStudentUsernames.clear();
       showToast(`All selected student accounts are already ${expectedActive ? 'active' : 'deactivated'}.`);
-      return;
-    }
-    const activeUserCount = state.users.filter(user => importedUsernames.has(user.username) && !deactivated.has(user.username)).length;
-    if (!expectedActive && changedUsernames.length >= activeUserCount) {
-      selectedStudentUsernames = previousSelection;
-      showToast('Keep at least one individual account active. Use the workbook-wide switch to deactivate everyone.');
       return;
     }
     const nextDeactivated = new Set(deactivated);
