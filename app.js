@@ -426,6 +426,7 @@ function reconcileStudentSession() {
   if (session.quizId === state.currentQuizId && (hasActiveQuiz || session.completed)) return;
   stopTimer();
   session.started = false;
+  session.deadlineAt = null;
   session.quizId = state.currentQuizId;
   session.completed = false;
   session.result = null;
@@ -808,7 +809,10 @@ async function startStudentQuiz() {
       return showToast(`Your saved quiz progress could not be loaded from Supabase: ${error.message || error}`, 'error');
     }
   }
-  if (!session.started) session.remaining = Math.max(60, Number(state.config.duration) * 60);
+  if (!session.started) {
+    session.remaining = Math.max(60, Number(state.config.duration) * 60);
+    session.deadlineAt = null;
+  }
   session.started = true;
   if (!Number.isFinite(Date.parse(session.deadlineAt || ''))) {
     session.deadlineAt = new Date(Date.now() + session.remaining * 1000).toISOString();
