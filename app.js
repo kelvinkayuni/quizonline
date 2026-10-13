@@ -188,6 +188,7 @@ const defaultState = {
   healthClearedAt: null,
   importedFile: null,
   studentLoginActive: false,
+  deactivatedStudentUsernames: [],
   configSaved: false,
   config: { courseName: '', courseCode: '', totalQuestions: 0, duration: 0, start: '', end: '' },
   activity: [],
@@ -203,6 +204,7 @@ if (!state.studentQuestionOrders) state.studentQuestionOrders = {};
 if (!Array.isArray(state.deletedQuizIds)) state.deletedQuizIds = [];
 if (typeof state.quizStopped !== 'boolean') state.quizStopped = false;
 if (typeof state.studentLoginActive !== 'boolean') state.studentLoginActive = false;
+if (!Array.isArray(state.deactivatedStudentUsernames)) state.deactivatedStudentUsernames = [];
 if (typeof state.configSaved !== 'boolean') state.configSaved = false;
 if (!state.importedFile) { state.users = []; saveState(); }
 let teacherView = 'overview';
@@ -215,6 +217,7 @@ let expandedQuestionIds = new Set();
 let selectedResultFileId = null;
 let selectedQuestionHistoryIds = new Set();
 let selectedResultFileIds = new Set();
+let selectedStudentUsernames = new Set();
 let resultFileSelectionMenuOpen = false;
 let persistenceTimer = null;
 let liveRefreshTimer = null;
@@ -784,6 +787,14 @@ function updateBulkDeletionButtons() {
     button.textContent = teacherMutationInFlight ? 'Deleting selected...' : `Delete selected (${fileCount})`;
   });
 }
+function updateSelectedStudentAccountControls() {
+  const selectedCount = state.users.filter(user => selectedStudentUsernames.has(user.username)).length;
+  const countLabel = document.querySelector('.student-account-actions .subtle');
+  if (countLabel) countLabel.textContent = `${selectedCount} selected`;
+  document.querySelectorAll('[data-action="activate-selected-students"], [data-action="deactivate-selected-students"]').forEach(button => {
+    button.disabled = teacherMutationInFlight || !selectedCount;
+  });
+}
 document.addEventListener('change', event => {
   const checkbox = event.target;
   if (checkbox.matches('[data-action="select-question-history"]')) {
@@ -794,6 +805,10 @@ document.addEventListener('change', event => {
     if (checkbox.checked) selectedResultFileIds.add(checkbox.dataset.fileId);
     else selectedResultFileIds.delete(checkbox.dataset.fileId);
     updateBulkDeletionButtons();
+  } else if (checkbox.matches('[data-action="select-student-account"]')) {
+    if (checkbox.checked) selectedStudentUsernames.add(checkbox.dataset.username);
+    else selectedStudentUsernames.delete(checkbox.dataset.username);
+    updateSelectedStudentAccountControls();
   }
 });
 document.addEventListener('click', event => {
@@ -811,7 +826,13 @@ function choiceInputsForEditing() { const question = editingQuestionId && state.
 function correctOptionsForEditing() { const question = editingQuestionId && state.questions.find(item => item.id === editingQuestionId); const count = question ? question.choices.length : 4; return Array.from({ length: count }, (_, index) => `<option value="${index}" ${question?.correct === index ? 'selected' : ''}>Choice ${String.fromCharCode(65 + index)}</option>`).join(''); }
 function questionList() { if (!state.questions.length) return '<div class="empty">Your question bank is empty. Add a question to begin.</div>'; return state.questions.map((question, index) => `<article class="question-item"><div class="question-meta"><span class="badge">Q${String(index + 1).padStart(2, '0')}</span><span>${question.marks} marks</span></div><h3 style="margin-top:12px">${esc(question.text)}</h3><div class="question-details" id="details-${question.id}"><p class="subtle" style="margin-bottom:0">${question.choices.length} choices · Correct answer: ${String.fromCharCode(65 + question.correct)}</p>${question.choices.map((choice, choiceIndex) => `<div class="subtle">${String.fromCharCode(65 + choiceIndex)}. ${esc(choice)}</div>`).join('')}</div><div class="question-actions"><button class="btn btn-secondary btn-small" data-action="expand-question" data-id="${question.id}">Expand</button><button class="btn btn-secondary btn-small" data-action="edit-question" data-id="${question.id}">Edit</button><button class="btn btn-coral btn-small" data-action="delete-question" data-id="${question.id}">Delete</button></div></article>`).join(''); }
 function configView() { const config = state.config; return `<section class="card panel" style="max-width:760px"><div class="panel-head"><div><h2>Set the assessment rules</h2><p class="subtle">Students will see these limits when they sign in.</p></div><span class="badge">${config.totalQuestions ? `${config.totalQuestions} questions` : 'Empty rules'}</span></div><form id="config-form"><div class="form-grid"><div class="field"><label>Total questions</label><input type="number" name="totalQuestions" min="1" max="${Math.max(1, state.questions.length)}" value="${config.totalQuestions || ''}" placeholder="e.g. 10" /></div><div class="field"><label>Duration (minutes)</label><input type="number" name="duration" min="1" value="${config.duration || ''}" placeholder="e.g. 30" /></div><div class="field"><label>Start date & time</label><input type="datetime-local" name="start" value="${config.start}" /></div><div class="field"><label>End date & time</label><input type="datetime-local" name="end" value="${config.end}" /></div></div><div style="display:flex;justify-content:flex-end;gap:9px;margin-top:20px"><button type="button" class="btn btn-secondary" data-action="reset-config">Reset rules</button><button class="btn btn-primary" ${state.configSaved ? 'disabled' : ''}>Save configuration</button></div></form></section>`; }
-function usersView() { const file = state.importedFile; const active = Boolean(file && state.studentLoginActive); return `<section class="grid two-col"><div class="card panel"><div class="panel-head"><div><h2>Import student accounts</h2><p class="subtle">Upload an .xlsx file with username/password pairs across columns.</p></div></div><label class="upload"><span class="upload-icon">${icon('upload')}</span><strong>${file ? 'Replace Excel file' : 'Choose Excel file'}</strong><span class="subtle">Columns alternate: username, password</span><input id="user-upload" type="file" accept=".xlsx,.xls,.csv" ${active ? 'disabled' : ''} /></label>${file ? `<div class="file-row"><span><strong>${esc(file.name)}</strong><br><span class="subtle">${file.count} accounts · ${formatDate(file.uploadedAt)}</span></span><button class="btn btn-coral btn-small" data-action="delete-upload" ${active ? 'disabled' : ''}>Delete file</button></div><div class="login-activation"><span><strong>Student login</strong><br><span class="subtle">${active ? 'Workbook credentials are in use.' : 'Activate this workbook to allow student login.'}</span></span><button class="btn ${active ? 'btn-primary' : 'btn-secondary'} btn-small" data-action="toggle-student-login">${active ? 'Active' : 'Inactive'}</button></div>` : ''}<div class="hint" style="margin-top:17px">${active ? 'Delete and replace are disabled while this workbook is active.' : file ? 'Activate the workbook when you are ready to allow its credentials.' : 'The first row can be a header. Upload a workbook to configure student access.'}</div></div><div class="card panel"><div class="panel-head"><div><h2>Student directory</h2><p class="subtle">${state.users.length} account${state.users.length === 1 ? '' : 's'} available</p></div></div><div class="table-wrap"><table><thead><tr><th>Username</th><th>Status</th><th>Last seen</th></tr></thead><tbody>${state.users.map(user => `<tr><td><strong>${esc(user.username)}</strong></td><td><span class="status ${user.status === 'online' ? '' : 'offline'}">${user.status === 'online' ? 'Online' : 'Offline'}</span></td><td class="subtle">${user.lastSeen ? formatDate(user.lastSeen) : '—'}</td></tr>`).join('')}</tbody></table></div></div></section>`; }
+function usersView() {
+  const file = state.importedFile;
+  const active = Boolean(file && state.studentLoginActive);
+  const deactivatedStudents = new Set(state.deactivatedStudentUsernames || []);
+  const selectedCount = state.users.filter(user => selectedStudentUsernames.has(user.username)).length;
+  return `<section class="grid two-col"><div class="card panel"><div class="panel-head"><div><h2>Import student accounts</h2><p class="subtle">Upload an .xlsx file with username/password pairs across columns.</p></div></div><label class="upload"><span class="upload-icon">${icon('upload')}</span><strong>${file ? 'Replace Excel file' : 'Choose Excel file'}</strong><span class="subtle">Columns alternate: username, password</span><input id="user-upload" type="file" accept=".xlsx,.xls,.csv" ${active ? 'disabled' : ''} /></label>${file ? `<div class="file-row"><span><strong>${esc(file.name)}</strong><br><span class="subtle">${file.count} accounts · ${formatDate(file.uploadedAt)}</span></span><button class="btn btn-coral btn-small" data-action="delete-upload" ${active ? 'disabled' : ''}>Delete file</button></div><div class="login-activation"><span><strong>Student login</strong><br><span class="subtle">${active ? 'Workbook credentials are in use.' : 'Activate this workbook to allow student login.'}</span></span><button class="btn ${active ? 'btn-primary' : 'btn-secondary'} btn-small" data-action="toggle-student-login">${active ? 'Active' : 'Inactive'}</button></div>` : ''}<div class="hint" style="margin-top:17px">${active ? 'Delete and replace are disabled while this workbook is active.' : file ? 'Activate the workbook when you are ready to allow its credentials.' : 'The first row can be a header. Upload a workbook to configure student access.'}</div></div><div class="card panel"><div class="panel-head"><div><h2>Student directory</h2><p class="subtle">${state.users.length} account${state.users.length === 1 ? '' : 's'} available</p></div></div><div class="student-account-actions"><span class="subtle">${selectedCount} selected</span><button type="button" class="btn btn-secondary btn-small" data-action="activate-selected-students" ${selectedCount && !teacherMutationInFlight ? '' : 'disabled'}>${teacherMutationInFlight ? 'Updating...' : 'Activate selected'}</button><button type="button" class="btn btn-coral btn-small" data-action="deactivate-selected-students" ${selectedCount && !teacherMutationInFlight ? '' : 'disabled'}>${teacherMutationInFlight ? 'Updating...' : 'Deactivate selected'}</button></div><div class="table-wrap"><table><thead><tr><th>Select</th><th>Username</th><th>Account access</th><th>Session</th><th>Last seen</th></tr></thead><tbody>${state.users.map(user => { const studentDeactivated = deactivatedStudents.has(user.username); const accessLabel = !active ? 'Workbook inactive' : studentDeactivated ? 'Deactivated' : 'Active'; return `<tr><td><input type="checkbox" data-action="select-student-account" data-username="${esc(user.username)}" aria-label="Select ${esc(user.username)}" ${selectedStudentUsernames.has(user.username) ? 'checked' : ''} ${teacherMutationInFlight ? 'disabled' : ''}></td><td><strong>${esc(user.username)}</strong></td><td><span class="status ${active && !studentDeactivated ? '' : 'offline'}">${accessLabel}</span></td><td><span class="status ${user.status === 'online' ? '' : 'offline'}">${user.status === 'online' ? 'Online' : 'Offline'}</span></td><td class="subtle">${user.lastSeen ? formatDate(user.lastSeen) : '—'}</td></tr>`; }).join('')}</tbody></table></div></div></section>`;
+}
 function resultsView() {
   const file = state.resultFiles.find(item => item.id === selectedResultFileId) || state.resultFiles[0];
   if (file) selectedResultFileId = file.id;
@@ -1146,7 +1167,9 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
     studentQuizRefreshTimer = setInterval(async () => {
       const accessResult = await supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle();
       const accessData = accessResult.data?.data;
-      const hasStudentAccess = !accessResult.error && Boolean(accessData?.studentLoginActive && accessData.importedFile?.usernames?.includes(session?.username));
+      const hasStudentAccess = !accessResult.error
+        && Boolean(accessData?.studentLoginActive && accessData.importedFile?.usernames?.includes(session?.username))
+        && !(accessData?.deactivatedStudentUsernames || []).includes(session?.username);
       if (!hasStudentAccess) return revokeStudentAccess();
       const activeAttempt = session?.role === 'student' && session.started && !session.completed ? structuredClone(session) : null;
       const previousStart = state.config.start;
@@ -1224,6 +1247,8 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
   const upload = document.querySelector('#user-upload'); if (upload) upload.addEventListener('change', importUsers);
   const deleteUpload = document.querySelector('[data-action="delete-upload"]'); if (deleteUpload) deleteUpload.addEventListener('click', deleteUploadedFile);
   const toggleStudentLogin = document.querySelector('[data-action="toggle-student-login"]'); if (toggleStudentLogin) toggleStudentLogin.addEventListener('click', toggleStudentLoginActivation);
+  const activateSelectedStudents = document.querySelector('[data-action="activate-selected-students"]'); if (activateSelectedStudents) activateSelectedStudents.addEventListener('click', () => { void updateSelectedStudentAccess(true); });
+  const deactivateSelectedStudents = document.querySelector('[data-action="deactivate-selected-students"]'); if (deactivateSelectedStudents) deactivateSelectedStudents.addEventListener('click', () => { void updateSelectedStudentAccess(false); });
   const download = document.querySelector('[data-action="download-results"]'); if (download) download.addEventListener('click', downloadResults);
   const openResult = document.querySelector('[data-action="open-result"]'); if (openResult) openResult.addEventListener('click', downloadResults);
   const viewHistory = document.querySelector('[data-action="view-student-history"]'); if (viewHistory) viewHistory.addEventListener('click', () => document.querySelector('#student-history-panel')?.scrollIntoView({ behavior: 'smooth' }));
@@ -1287,6 +1312,7 @@ async function handleLogin(event) {
     const workspace = data?.data || {};
     state.importedFile = workspace.importedFile || null;
     state.studentLoginActive = Boolean(workspace.studentLoginActive);
+    state.deactivatedStudentUsernames = Array.isArray(workspace.deactivatedStudentUsernames) ? workspace.deactivatedStudentUsernames : [];
     if (Array.isArray(workspace.users)) state.users = workspace.users;
     saveState({ localOnly: true });
   } catch (error) {
@@ -1301,6 +1327,9 @@ async function handleLogin(event) {
   const importedUsername = state.importedFile?.usernames?.find(item => item === username);
   if (importedUsername && !state.studentLoginActive) {
     return showToast('Student login is deactivated by the teacher. Please try again after it has been activated.', 'error');
+  }
+  if (importedUsername && state.deactivatedStudentUsernames.includes(importedUsername)) {
+    return showToast('Your student account has been deactivated by the teacher.', 'error');
   }
   const student = state.studentLoginActive && state.importedFile && importedUsername
     ? state.users.find(user => user.username === importedUsername && user.password === password)
@@ -1751,8 +1780,56 @@ async function persistWorkspaceChange(confirmChange) {
   }
   if (!(await confirmChange())) throw new Error('Supabase did not confirm the workspace change.');
 }
+async function confirmStudentAccessState(usernames, expectedActive) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt) await new Promise(resolve => setTimeout(resolve, 500));
+    const { data, error } = await supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle();
+    if (error) return false;
+    const deactivated = new Set(data?.data?.deactivatedStudentUsernames || []);
+    if (usernames.every(username => deactivated.has(username) !== expectedActive)) return true;
+  }
+  return false;
+}
+async function updateSelectedStudentAccess(expectedActive) {
+  if (!state.importedFile || teacherMutationInFlight) return;
+  const importedUsernames = new Set(state.importedFile.usernames || []);
+  const usernames = state.users
+    .map(user => user.username)
+    .filter(username => importedUsernames.has(username) && selectedStudentUsernames.has(username));
+  if (!usernames.length) return;
+  const previousState = structuredClone(state);
+  const previousSelection = new Set(selectedStudentUsernames);
+  teacherMutationInFlight = true;
+  teacherWorkspaceMutationVersion++;
+  app();
+  try {
+    const deactivated = new Set(state.deactivatedStudentUsernames || []);
+    const changedUsernames = usernames.filter(username => deactivated.has(username) === expectedActive);
+    if (!changedUsernames.length) {
+      selectedStudentUsernames.clear();
+      showToast(`All selected student accounts are already ${expectedActive ? 'active' : 'deactivated'}.`);
+      return;
+    }
+    const nextDeactivated = new Set(deactivated);
+    changedUsernames.forEach(username => expectedActive ? nextDeactivated.delete(username) : nextDeactivated.add(username));
+    state.deactivatedStudentUsernames = [...nextDeactivated];
+    if (!expectedActive) await markStudentsOffline(changedUsernames, state.currentQuizId);
+    addActivity(`Student login ${expectedActive ? 'activated' : 'deactivated'} for ${changedUsernames.length} selected account${changedUsernames.length === 1 ? '' : 's'}`, 'users', { localOnly: true });
+    saveState({ workspaceOnly: true });
+    await persistWorkspaceChange(() => confirmStudentAccessState(changedUsernames, expectedActive));
+    selectedStudentUsernames.clear();
+    showToast(`Student login ${expectedActive ? 'activated' : 'deactivated'} for ${changedUsernames.length} selected account${changedUsernames.length === 1 ? '' : 's'}.`);
+  } catch (error) {
+    restoreState(previousState);
+    selectedStudentUsernames = previousSelection;
+    showToast(`Selected student access could not be updated: ${error.message || error}`, 'error');
+  } finally {
+    teacherMutationInFlight = false;
+    app();
+  }
+}
 async function importUsers(event) { const file = event.target.files[0]; if (!file || !window.XLSX || state.studentLoginActive) return; const previousState = structuredClone(state); teacherMutationInFlight = true; try { const buffer = await file.arrayBuffer(); const workbook = XLSX.read(buffer, { type: 'array' }); const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 }); const validation = validateCredentialRows(rows); if (validation.error || !validation.credentials.length) { event.target.value = ''; showToast(validation.error || 'The workbook contains no student credentials.'); return; } removeImportedUsers(); const importedUsernames = []; validation.credentials.forEach(({ username, password }) => { state.users.push({ username, password, status: 'offline', lastSeen: null }); importedUsernames.push(username); }); state.importedFile = { name: file.name, count: validation.credentials.length, uploadedAt: new Date().toISOString(), usernames: importedUsernames }; state.studentLoginActive = false; saveState({ workspaceOnly: true }); addActivity(`${validation.credentials.length} student account${validation.credentials.length === 1 ? '' : 's'} imported`, 'users'); await persistWorkspaceChange(() => confirmImportedFile(state.importedFile)); showToast(`${validation.credentials.length} student account${validation.credentials.length === 1 ? '' : 's'} imported.`); app(); } catch (error) { restoreState(previousState); showToast(`Workbook import could not be saved: ${error.message || error}`); } finally { teacherMutationInFlight = false; } }
-function removeImportedUsers() { const usernames = new Set(state.importedFile?.usernames || []); if (usernames.size) state.users = state.users.filter(user => !usernames.has(user.username)); state.importedFile = null; state.studentLoginActive = false; }
+function removeImportedUsers() { const usernames = new Set(state.importedFile?.usernames || []); if (usernames.size) state.users = state.users.filter(user => !usernames.has(user.username)); state.importedFile = null; state.studentLoginActive = false; state.deactivatedStudentUsernames = []; selectedStudentUsernames.clear(); }
 async function deleteUploadedFile() { if (state.studentLoginActive || teacherMutationInFlight) return; const previousState = structuredClone(state); teacherMutationInFlight = true; try { const usernames = state.importedFile?.usernames || []; await markStudentsOffline(usernames, state.currentQuizId); removeImportedUsers(); saveState({ workspaceOnly: true }); addActivity('The uploaded student workbook was deleted', 'users'); await persistWorkspaceChange(confirmImportedFileDeleted); showToast('Uploaded file removed.'); app(); } catch (error) { restoreState(previousState); showToast(`Uploaded file could not be deleted: ${error.message || error}`); } finally { teacherMutationInFlight = false; } }
 async function toggleStudentLoginActivation() { if (!state.importedFile || teacherMutationInFlight) return; const previousState = structuredClone(state); teacherMutationInFlight = true; try { state.studentLoginActive = !state.studentLoginActive; const expectedState = state.studentLoginActive; if (!expectedState) await markStudentsOffline(state.importedFile.usernames || [], state.currentQuizId); saveState({ workspaceOnly: true }); addActivity(`Uploaded student login ${expectedState ? 'activated' : 'deactivated'}`, 'users'); await persistWorkspaceChange(() => confirmStudentLoginState(expectedState)); showToast(expectedState ? 'Uploaded credentials are now active.' : 'Uploaded credentials are inactive. All imported students were signed out.'); app(); } catch (error) { restoreState(previousState); showToast(`Student login status could not be saved: ${error.message || error}`); } finally { teacherMutationInFlight = false; } }
 const toggleStudentLoginActivationHandler = toggleStudentLoginActivation;

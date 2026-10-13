@@ -101,6 +101,10 @@ tr:last-child td { border: 0; }
 .empty { padding: 28px 10px; color: var(--muted); text-align: center; font-size: 12px; }
 .file-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 16px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: #fbfaf5; font-size: 12px; }
 .login-activation { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: #fbfaf5; font-size: 12px; }
+.student-account-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.student-account-actions > .subtle { margin-right: auto; }
+.student-account-actions button { width: auto; }
+.table-wrap input[data-action="select-student-account"] { width: 16px; height: 16px; accent-color: var(--teal); }
 .file-selector { display: grid; gap: 7px; max-width: 460px; margin-bottom: 18px; }
 .file-selector select { padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: #fbfaf5; color: var(--ink); }
 .result-history-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
@@ -119,6 +123,7 @@ tr:last-child td { border: 0; }
 .result-file-choice > span { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
 .quiz-question-history-select { display: inline-flex; align-items: center; }
 @media (max-width: 620px) { .result-history-toolbar { align-items: stretch; flex-direction: column; } .result-file-selection-control { justify-content: space-between; } .result-file-select-menu { min-width: 0; } .result-file-select-menu summary { max-width: calc(100vw - 175px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .result-history-toolbar > button { align-self: flex-end; margin-top: 0; } }
+@media (max-width: 620px) { .student-account-actions { justify-content: flex-start; } .student-account-actions > .subtle { flex: 0 0 100%; } .student-account-actions button { flex: 1 1 auto; } }
 .login-page { display: grid; grid-template-columns: minmax(320px, .8fr) 1.2fr; min-height: 100vh; background: var(--paper); }
 .login-art { display: flex; flex-direction: column; justify-content: space-between; padding: 46px 6vw; background: #1d403d; color: white; overflow: hidden; position: relative; }
 .login-art:after { position: absolute; right: -80px; bottom: 12%; width: 300px; height: 300px; border: 1px solid #54827a; border-radius: 50%; box-shadow: 0 0 0 38px rgba(84,130,122,.18), 0 0 0 78px rgba(84,130,122,.1); content: ''; }

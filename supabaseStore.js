@@ -610,6 +610,9 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true, 
     }
     state.importedFile = workspace.importedFile || null;
     state.studentLoginActive = Boolean(workspace.studentLoginActive);
+    state.deactivatedStudentUsernames = Array.isArray(workspace.deactivatedStudentUsernames)
+      ? workspace.deactivatedStudentUsernames
+      : [];
     state.studentQuestionOrders = {
       ...(workspace.studentQuestionOrders && typeof workspace.studentQuestionOrders === 'object' ? workspace.studentQuestionOrders : state.studentQuestionOrders),
       ...publishedQuestionOrders
@@ -965,6 +968,7 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
           users: stateToPersist.users,
           importedFile: stateToPersist.importedFile,
           studentLoginActive: stateToPersist.studentLoginActive,
+          deactivatedStudentUsernames: stateToPersist.deactivatedStudentUsernames,
           studentQuestionOrders: stateToPersist.studentQuestionOrders,
           configSaved: Boolean(stateToPersist.configSaved),
           resultFiles: stateToPersist.resultFiles,
@@ -1114,6 +1118,7 @@ export function persistQuizState(state, role = 'teacher', options = {}) {
         users: stateToPersist.users,
         importedFile: stateToPersist.importedFile,
         studentLoginActive: stateToPersist.studentLoginActive,
+        deactivatedStudentUsernames: stateToPersist.deactivatedStudentUsernames,
         studentQuestionOrders: stateToPersist.studentQuestionOrders,
         configSaved: Boolean(stateToPersist.configSaved),
         resultFiles: [...resultFilesById.values()],
