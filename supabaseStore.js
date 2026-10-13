@@ -856,6 +856,44 @@ export function persistActivityClear(state, clearedAt) {
   return operation;
 }
 
+export function persistQuizConfiguration(state) {
+  const config = state.config;
+  const payload = {
+    id: 1,
+    course_name: config.courseName || null,
+    course_code: config.courseCode || null,
+    total_questions: config.totalQuestions,
+    duration: config.duration,
+    start_time: toSupabaseTimestamp(config.start),
+    end_time: toSupabaseTimestamp(config.end),
+    quiz_id: state.currentQuizId,
+    published: state.questionsPublished,
+    stopped: state.quizStopped
+  };
+  const operation = syncQueue.then(async () => {
+    const { data, error } = await withTimeout(
+      supabase.from('quiz_config').upsert(payload).select('course_name, course_code, quiz_id, published, stopped, total_questions, duration, start_time, end_time').single(),
+      'Configuration synchronization'
+    );
+    if (error) throw error;
+    const timestampMatches = (saved, expected) => (saved ? Date.parse(saved) : null) === (expected ? Date.parse(expected) : null);
+    const confirmed = Boolean(data)
+      && String(data.course_name || '') === String(payload.course_name || '')
+      && String(data.course_code || '') === String(payload.course_code || '')
+      && (data.quiz_id || null) === payload.quiz_id
+      && Boolean(data.published) === Boolean(payload.published)
+      && Boolean(data.stopped) === Boolean(payload.stopped)
+      && Number(data.total_questions) === Number(payload.total_questions)
+      && Number(data.duration) === Number(payload.duration)
+      && timestampMatches(data.start_time, payload.start_time)
+      && timestampMatches(data.end_time, payload.end_time);
+    if (!confirmed) throw new Error('Supabase did not confirm the saved quiz configuration.');
+    return data;
+  });
+  syncQueue = operation.catch(() => {});
+  return operation;
+}
+
 export function persistQuizState(state, role = 'teacher', options = {}) {
   pendingState = state;
   pendingOptions = { ...options };

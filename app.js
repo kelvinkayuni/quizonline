@@ -1,7 +1,7 @@
 function courseDisplayValue(value) { const normalized = String(value || '').trim(); return normalized === '34' || normalized.toLowerCase() === 'course' ? '' : normalized; }
 function studentCourseDetails() { const courseName = courseDisplayValue(state.config.courseName); const courseCode = courseDisplayValue(state.config.courseCode); return courseName || courseCode ? `<div class="course-banner">${courseName ? `<strong>${esc(courseName)}</strong>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''; }
 import { supabase } from './supabase.js';
-import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, deleteTeacherQuizQuestionHistory, hydrateQuizState, listTeacherQuizQuestionHistory, loadStudentQuizReport, loadStudentQuizResult, loadTeacherQuizQuestionHistory, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt } from './supabaseStore.js';
+import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, deleteTeacherQuizQuestionHistory, hydrateQuizState, listTeacherQuizQuestionHistory, loadStudentQuizReport, loadStudentQuizResult, loadTeacherQuizQuestionHistory, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizConfiguration, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt } from './supabaseStore.js';
 import { loadLiveStudentUsernames, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { SHORT_ANSWER_FULL_CREDIT_THRESHOLD, roundToOneDecimal, shortAnswerMarksAwarded, shortAnswerMatchScore } from './shortAnswerMatching.js';
 import { assignUniqueStudentQuestionOrders } from './studentQuestionOrders.js';
@@ -126,6 +126,11 @@ async function saveConfig(event) {
   const wasEnded = quizHasEnded();
   const expiredPublishedQuiz = wasEnded && state.questionsPublished && !state.quizStopped;
   teacherMutationInFlight = true;
+  const submitButton = event.submitter || event.target.querySelector('button[type="submit"]');
+  if (submitButton) {
+    submitButton.disabled = true;
+    submitButton.textContent = 'Saving...';
+  }
   try {
     state.config = { courseName: state.config.courseName || '', courseCode: state.config.courseCode || '', totalQuestions: state.questions.length, duration, start, end };
     state.configSaved = true;
@@ -140,19 +145,13 @@ async function saveConfig(event) {
     }
     delete state.drafts.config;
     saveState({ localOnly: true });
-    await persistQuizState(state, 'teacher', { waitForSync: true });
-    await persistQuizControlState();
-    await confirmSavedConfiguration({
-      ...state.config,
-      currentQuizId: state.currentQuizId,
-      questionsPublished: state.questionsPublished,
-      quizStopped: state.quizStopped
-    });
-    addActivity(expiredPublishedQuiz ? 'Expired quiz questions are ready as a new draft' : 'Quiz configuration was updated', 'settings');
+    await persistQuizConfiguration(state);
+    addActivity(expiredPublishedQuiz ? 'Expired quiz questions are ready as a new draft' : 'Quiz configuration was updated', 'settings', { localOnly: true });
+    void persistQuizState(state, 'teacher', { workspaceOnly: true });
     showToast(expiredPublishedQuiz ? 'Configuration saved. Submit the saved questions to create the new quiz.' : 'Quiz configuration saved.');
   } catch (error) {
     state.configSaved = false;
-    saveState();
+    saveState({ localOnly: true });
     showToast(`Configuration could not be saved: ${error.message || error}`);
   } finally {
     teacherMutationInFlight = false;
@@ -839,7 +838,7 @@ function studentSchedule() { const config = state.config; const courseName = cou
 function studentResult() { const result = session.result || state.results.find(item => item.username === session.username); const history = state.studentHistory.filter(item => item.username === session.username); const percentage = result?.percentage ?? 0; const passed = percentage >= 50; const pending = Boolean(session.resultSyncPending); return `<main class="main"><div class="quiz-shell"><div class="quiz-top"><div class="brand"><span class="brand-mark">OQ</span><strong>ONLINE QUIZ</strong></div><div class="student-actions"><button class="btn btn-secondary btn-small" data-action="view-student-history">View student history</button><button class="btn btn-secondary btn-small" data-action="download-student-history" ${history.length ? '' : 'disabled'}>Download history</button>${pending ? '' : '<button class="btn btn-secondary btn-small" data-action="logout">Sign out</button>'}</div></div><section class="card result-hero"><div class="eyebrow kicker">${pending ? 'Submission not confirmed' : 'Assessment complete'}</div><div class="score-big">${percentage}%</div><h2>${passed ? 'WELL DONE' : 'NOT GOOD'}, ${esc(session.username)}.</h2><p class="subtle">${pending ? `Supabase has not confirmed this result yet. Keep this page open and retry the save; do not start this quiz again on another device until confirmation. ${esc(session.resultSyncError || '')}` : 'Your answers have been recorded. This attempt is final and cannot be retaken.'}</p>${pending ? '<button class="btn btn-primary" data-action="retry-result-save">Retry result save</button>' : ''}<div class="grid" style="grid-template-columns:repeat(3,1fr);margin:30px 0;text-align:left"><div><div class="eyebrow">Score</div><strong>${result ? result.score : 0}/${result ? result.totalMarks : 0}</strong></div><div><div class="eyebrow">Attempted</div><strong>${result ? result.attempted : 0}</strong></div><div><div class="eyebrow">Incorrect</div><strong>${result ? result.incorrect : 0}</strong></div></div></section><section class="card panel student-history-panel" id="student-history-panel"><div class="panel-head"><div><h2>Quiz history</h2><p class="subtle">Your records can be viewed or downloaded, but not deleted.</p></div></div>${studentHistoryTable(history)}</section></div></main>`; }
 function studentHistoryTable(history) { if (!history.length) return '<div class="empty">No completed quiz history yet.</div>'; return `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Quiz</th><th>Duration</th><th>Attempted</th><th>Right</th><th>Wrong</th><th>Marks scored</th><th>Report</th></tr></thead><tbody>${history.map(item => `<tr><td>${formatDate(item.completedAt)}</td><td>${esc(item.quizId || 'Not recorded')}</td><td>${item.durationMinutes || 0} min</td><td>${item.attempted}</td><td>${item.correct ?? Math.max(0, item.attempted - item.incorrect)}</td><td>${item.incorrect}</td><td><strong>${item.score}/${item.totalMarks}</strong></td><td><button class="btn btn-secondary btn-small" data-action="download-quiz-report" data-quiz-id="${esc(item.quizId || '')}" ${item.quizId ? '' : 'disabled'}>Download report</button></td></tr>`).join('')}</tbody></table></div>`; }
 function formatTime(totalSeconds) { const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0'); const seconds = Math.max(0, totalSeconds % 60).toString().padStart(2, '0'); return `${minutes}:${seconds}`; }
-function addActivity(text, type = 'book') { state.activity.unshift({ text, type, time: new Date().toISOString() }); state.activity = state.activity.slice(0, 20); saveState(); }
+function addActivity(text, type = 'book', options = {}) { state.activity.unshift({ text, type, time: new Date().toISOString() }); state.activity = state.activity.slice(0, 20); saveState(options); }
 async function persistQuizControlState() { if (state.questionsPublished && state.currentQuizId) return; const result = await supabase.from('quiz_config').upsert({ id: 1, course_name: state.config.courseName || null, course_code: state.config.courseCode || null, total_questions: state.config.totalQuestions, duration: state.config.duration, start_time: state.config.start ? new Date(state.config.start).toISOString() : null, end_time: state.config.end ? new Date(state.config.end).toISOString() : null, quiz_id: state.currentQuizId, published: state.questionsPublished, stopped: state.quizStopped }); if (result.error) throw result.error; }
 const CONFIG_CONFIRM_ATTEMPTS = 5;
 const CONFIG_CONFIRM_INTERVAL = 7500;
