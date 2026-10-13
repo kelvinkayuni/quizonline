@@ -223,6 +223,7 @@ let persistenceTimer = null;
 let liveRefreshTimer = null;
 let teacherDeadlineTimer = null;
 let teacherMutationInFlight = false;
+let studentAccessAction = null;
 let teacherWorkspaceMutationVersion = 0;
 let studentHeartbeatTimer = null;
 let studentQuizRefreshTimer = null;
@@ -818,9 +819,19 @@ function updateSelectedStudentAccountControls() {
     checkbox.disabled = teacherMutationInFlight || !canManageStudents;
   });
   const activateButton = document.querySelector('[data-action="activate-selected-students"]');
-  if (activateButton) activateButton.disabled = teacherMutationInFlight || !canManageStudents || !selectedAllDeactivated;
+  if (activateButton) {
+    activateButton.disabled = teacherMutationInFlight || !canManageStudents || !selectedAllDeactivated;
+    activateButton.textContent = studentAccessAction === 'activate' ? 'Updating...' : 'Activate selected';
+    if (studentAccessAction === 'activate') activateButton.setAttribute('aria-busy', 'true');
+    else activateButton.removeAttribute('aria-busy');
+  }
   const deactivateButton = document.querySelector('[data-action="deactivate-selected-students"]');
-  if (deactivateButton) deactivateButton.disabled = teacherMutationInFlight || !canManageStudents || !selectedAllActive || wouldDeactivateAll;
+  if (deactivateButton) {
+    deactivateButton.disabled = teacherMutationInFlight || !canManageStudents || !selectedAllActive || wouldDeactivateAll;
+    deactivateButton.textContent = studentAccessAction === 'deactivate' ? 'Updating...' : 'Deactivate selected';
+    if (studentAccessAction === 'deactivate') deactivateButton.setAttribute('aria-busy', 'true');
+    else deactivateButton.removeAttribute('aria-busy');
+  }
   const actions = document.querySelector('.student-account-actions');
   let hint = document.querySelector('.student-access-selection-hint');
   let message = '';
@@ -1858,6 +1869,7 @@ async function updateSelectedStudentAccess(expectedActive) {
   const previousState = structuredClone(state);
   const previousSelection = new Set(selectedStudentUsernames);
   teacherMutationInFlight = true;
+  studentAccessAction = expectedActive ? 'activate' : 'deactivate';
   teacherWorkspaceMutationVersion++;
   app();
   try {
@@ -1885,6 +1897,7 @@ async function updateSelectedStudentAccess(expectedActive) {
     selectedStudentUsernames = previousSelection;
     showToast(`Selected student access could not be updated: ${error.message || error}`, 'error');
   } finally {
+    studentAccessAction = null;
     teacherMutationInFlight = false;
     app();
   }
