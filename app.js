@@ -1,7 +1,7 @@
 function courseDisplayValue(value) { const normalized = String(value || '').trim(); return normalized === '34' || normalized.toLowerCase() === 'course' ? '' : normalized; }
 function studentCourseDetails() { const courseName = courseDisplayValue(state.config.courseName); const courseCode = courseDisplayValue(state.config.courseCode); return courseName || courseCode ? `<div class="course-banner">${courseName ? `<strong>${esc(courseName)}</strong>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''; }
 import { supabase } from './supabase.js';
-import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, deleteTeacherQuizQuestionHistory, hydrateQuizState, listTeacherQuizQuestionHistory, loadStudentQuizReport, loadStudentQuizResult, loadTeacherQuizQuestionHistory, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizConfiguration, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt } from './supabaseStore.js';
+import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, deleteTeacherQuizQuestionHistory, hydrateQuizState, listTeacherQuizQuestionHistory, loadStudentQuizReport, loadStudentQuizResult, loadTeacherQuizQuestionHistory, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizConfiguration, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAccessChange, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt } from './supabaseStore.js';
 import { loadLiveStudentUsernames, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { SHORT_ANSWER_FULL_CREDIT_THRESHOLD, roundToOneDecimal, shortAnswerMarksAwarded, shortAnswerMatchScore } from './shortAnswerMatching.js';
 import { assignUniqueStudentQuestionOrders } from './studentQuestionOrders.js';
@@ -1293,7 +1293,7 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
   const resetConfig = document.querySelector('[data-action="reset-config"]'); if (resetConfig) resetConfig.addEventListener('click', resetQuizConfig);
   const upload = document.querySelector('#user-upload'); if (upload) upload.addEventListener('change', importUsers);
   const deleteUpload = document.querySelector('[data-action="delete-upload"]'); if (deleteUpload) deleteUpload.addEventListener('click', deleteUploadedFile);
-  const toggleStudentLogin = document.querySelector('[data-action="toggle-student-login"]'); if (toggleStudentLogin) toggleStudentLogin.addEventListener('click', toggleStudentLoginActivation);
+  const toggleStudentLogin = document.querySelector('[data-action="toggle-student-login"]'); if (toggleStudentLogin) toggleStudentLogin.addEventListener('click', updateMasterStudentLoginAccess);
   const activateSelectedStudents = document.querySelector('[data-action="activate-selected-students"]'); if (activateSelectedStudents) activateSelectedStudents.addEventListener('click', () => { void updateSelectedStudentAccess(true); });
   const deactivateSelectedStudents = document.querySelector('[data-action="deactivate-selected-students"]'); if (deactivateSelectedStudents) deactivateSelectedStudents.addEventListener('click', () => { void updateSelectedStudentAccess(false); });
   const download = document.querySelector('[data-action="download-results"]'); if (download) download.addEventListener('click', downloadResults);
@@ -1861,25 +1861,60 @@ async function updateSelectedStudentAccess(expectedActive) {
   teacherWorkspaceMutationVersion++;
   app();
   try {
-    const changedUsernames = usernames.filter(username => deactivated.has(username) === expectedActive);
-    if (!changedUsernames.length) {
+    const result = await persistStudentAccessChange({
+      usernames,
+      activateSelected: expectedActive,
+      activityText: `Student login ${expectedActive ? 'activated' : 'deactivated'} for selected accounts`
+    });
+    if (!result.changedUsernames.length) {
       selectedStudentUsernames.clear();
       showToast(`All selected student accounts are already ${expectedActive ? 'active' : 'deactivated'}.`);
       return;
     }
-    const nextDeactivated = new Set(deactivated);
-    changedUsernames.forEach(username => expectedActive ? nextDeactivated.delete(username) : nextDeactivated.add(username));
-    state.deactivatedStudentUsernames = [...nextDeactivated];
-    if (!expectedActive) await markStudentsOffline(changedUsernames, state.currentQuizId);
-    addActivity(`Student login ${expectedActive ? 'activated' : 'deactivated'} for ${changedUsernames.length} selected account${changedUsernames.length === 1 ? '' : 's'}`, 'users', { localOnly: true });
-    saveState({ workspaceOnly: true });
-    await persistWorkspaceChange(() => confirmStudentAccessState(changedUsernames, expectedActive));
+    state.studentLoginActive = result.studentLoginActive;
+    state.deactivatedStudentUsernames = result.deactivatedStudentUsernames;
+    if (!expectedActive) void markStudentsOffline(result.changedUsernames, state.currentQuizId);
+    if (result.activityItem) {
+      state.activity = [result.activityItem, ...state.activity].slice(0, 20);
+      saveState({ localOnly: true });
+    }
     selectedStudentUsernames.clear();
-    showToast(`Student login ${expectedActive ? 'activated' : 'deactivated'} for ${changedUsernames.length} selected account${changedUsernames.length === 1 ? '' : 's'}.`);
+    showToast(`Student login ${expectedActive ? 'activated' : 'deactivated'} for ${result.changedUsernames.length} selected account${result.changedUsernames.length === 1 ? '' : 's'}.`);
   } catch (error) {
     restoreState(previousState);
     selectedStudentUsernames = previousSelection;
     showToast(`Selected student access could not be updated: ${error.message || error}`, 'error');
+  } finally {
+    teacherMutationInFlight = false;
+    app();
+  }
+}
+async function updateMasterStudentLoginAccess(event) {
+  if (!state.importedFile || teacherMutationInFlight) return;
+  const expectedState = !state.studentLoginActive;
+  const button = event.currentTarget;
+  teacherMutationInFlight = true;
+  teacherWorkspaceMutationVersion++;
+  button.disabled = true;
+  button.setAttribute('aria-busy', 'true');
+  button.textContent = expectedState ? 'Activating...' : 'Deactivating...';
+  document.querySelectorAll('.student-account-actions button, [data-action="select-student-account"]').forEach(control => { control.disabled = true; });
+  try {
+    if (!expectedState) void markStudentsOffline(state.importedFile.usernames || [], state.currentQuizId);
+    const result = await persistStudentAccessChange({
+      masterState: expectedState,
+      activityText: `Uploaded student login ${expectedState ? 'activated' : 'deactivated'}`
+    });
+    state.studentLoginActive = result.studentLoginActive;
+    state.deactivatedStudentUsernames = result.deactivatedStudentUsernames;
+    if (expectedState) selectedStudentUsernames.clear();
+    if (result.activityItem) {
+      state.activity = [result.activityItem, ...state.activity].slice(0, 20);
+      saveState({ localOnly: true });
+    }
+    showToast(expectedState ? 'Uploaded credentials are now active.' : 'Uploaded credentials are inactive. All imported students were signed out.');
+  } catch (error) {
+    showToast(`Student login status could not be saved: ${error.message || error}`, 'error');
   } finally {
     teacherMutationInFlight = false;
     app();

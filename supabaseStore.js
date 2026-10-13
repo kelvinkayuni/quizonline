@@ -899,6 +899,82 @@ export function persistQuizConfiguration(state) {
   return operation;
 }
 
+export async function persistStudentAccessChange({ masterState = null, usernames = [], activateSelected = null, activityText }) {
+  const requestedUsernames = [...new Set((usernames || []).filter(Boolean))];
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { data: current, error: readError } = await withTimeout(
+      supabase.from('quiz_workspace').select('data, updated_at').eq('id', 1).maybeSingle(),
+      'Student access loading'
+    );
+    if (readError) throw readError;
+    if (!current?.data) throw new Error('The student workspace could not be loaded.');
+
+    const workspace = current.data || {};
+    const importedUsernames = new Set(workspace.importedFile?.usernames || []);
+    const deactivated = new Set(workspace.deactivatedStudentUsernames || []);
+    let studentLoginActive = Boolean(workspace.studentLoginActive);
+    let changedUsernames = [];
+
+    if (masterState !== null) {
+      studentLoginActive = Boolean(masterState);
+      if (studentLoginActive) deactivated.clear();
+    } else {
+      if (activateSelected === null) throw new Error('Choose whether to activate or deactivate the selected accounts.');
+      if (!studentLoginActive) throw new Error('Activate workbook-wide student login before changing individual account access.');
+      if (requestedUsernames.some(username => !importedUsernames.has(username))) {
+        throw new Error('The student roster changed. Reload the directory and select the accounts again.');
+      }
+      changedUsernames = requestedUsernames.filter(username => deactivated.has(username) === activateSelected);
+      if (!changedUsernames.length) {
+        return { studentLoginActive, deactivatedStudentUsernames: [...deactivated], changedUsernames, activityItem: null };
+      }
+      if (!activateSelected) {
+        const activeCount = [...importedUsernames].filter(username => !deactivated.has(username)).length;
+        if (changedUsernames.length >= activeCount) {
+          throw new Error('Keep at least one individual account active. Use the workbook-wide switch to deactivate everyone.');
+        }
+      }
+      changedUsernames.forEach(username => activateSelected ? deactivated.delete(username) : deactivated.add(username));
+    }
+
+    const activityItem = activityText
+      ? { text: activityText, type: 'users', time: new Date().toISOString() }
+      : null;
+    const nextData = {
+      ...workspace,
+      studentLoginActive,
+      deactivatedStudentUsernames: [...deactivated],
+      ...(activityItem ? { activity: [activityItem, ...(Array.isArray(workspace.activity) ? workspace.activity : [])].slice(0, 20) } : {})
+    };
+    const updatedAt = new Date().toISOString();
+    const { data: saved, error: writeError } = await withTimeout(
+      supabase.from('quiz_workspace').update({ data: nextData, updated_at: updatedAt })
+        .eq('id', 1)
+        .eq('updated_at', current.updated_at)
+        .select('data, updated_at')
+        .maybeSingle(),
+      'Student access update'
+    );
+    if (writeError) throw writeError;
+    if (!saved?.data) continue;
+
+    const savedWorkspace = saved.data.data || {};
+    const savedDeactivated = new Set(savedWorkspace.deactivatedStudentUsernames || []);
+    const deactivationMatches = savedDeactivated.size === deactivated.size
+      && [...deactivated].every(username => savedDeactivated.has(username));
+    if (Boolean(savedWorkspace.studentLoginActive) !== studentLoginActive || !deactivationMatches) {
+      throw new Error('Supabase did not confirm the student access update.');
+    }
+    return {
+      studentLoginActive,
+      deactivatedStudentUsernames: [...deactivated],
+      changedUsernames,
+      activityItem
+    };
+  }
+  throw new Error('The workspace changed repeatedly. Retry the student access update.');
+}
+
 export function persistQuizState(state, role = 'teacher', options = {}) {
   pendingState = state;
   pendingOptions = { ...options };
