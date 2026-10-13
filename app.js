@@ -1217,6 +1217,9 @@ async function handleLogin(event) {
     }
   }
   const importedUsername = state.importedFile?.usernames?.find(item => item === username);
+  if (importedUsername && !state.studentLoginActive) {
+    return showToast('Student login is deactivated by the teacher. Please try again after it has been activated.', 'error');
+  }
   const student = state.studentLoginActive && state.importedFile && importedUsername
     ? state.users.find(user => user.username === importedUsername && user.password === password)
     : null;
