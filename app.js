@@ -1888,13 +1888,30 @@ const toggleStudentLoginActivationHandler = toggleStudentLoginActivation;
 toggleStudentLoginActivation = async function(event) {
   if (!state.importedFile || teacherMutationInFlight) return;
   teacherWorkspaceMutationVersion++;
-  const button = event.currentTarget;
   const expectedState = !state.studentLoginActive;
+  const previousDeactivatedStudentUsernames = state.deactivatedStudentUsernames;
+  const previousSelectedStudentUsernames = new Set(selectedStudentUsernames);
+  if (expectedState) {
+    state.deactivatedStudentUsernames = [];
+    selectedStudentUsernames.clear();
+  }
+  const button = event.currentTarget;
   button.disabled = true;
   button.setAttribute('aria-busy', 'true');
   button.textContent = expectedState ? 'Activating...' : 'Deactivating...';
   await toggleStudentLoginActivationHandler(event);
-  if (button.isConnected) app();
+  if (expectedState && !state.studentLoginActive) {
+    state.deactivatedStudentUsernames = previousDeactivatedStudentUsernames;
+    selectedStudentUsernames = previousSelectedStudentUsernames;
+    saveState({ localOnly: true });
+    app();
+  } else {
+    if (expectedState && previousDeactivatedStudentUsernames.length
+      && !(await confirmStudentAccessState(previousDeactivatedStudentUsernames, true))) {
+      showToast('Workbook access is active, but the individual account reset could not be confirmed.', 'error');
+    }
+    if (button.isConnected) app();
+  }
 };
 function resultFileQuizIds(file) { const quizIds = new Set(); if (file?.id?.startsWith('quiz-')) quizIds.add(file.id.slice(5)); (file?.rows || []).forEach(row => { if (row.quizId) quizIds.add(row.quizId); }); return [...quizIds]; }
 async function confirmDeletedResultFile(fileId, quizIds) {
