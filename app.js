@@ -219,6 +219,7 @@ let selectedQuestionHistoryIds = new Set();
 let selectedResultFileIds = new Set();
 let selectedStudentUsernames = new Set();
 let resultFileSelectionMenuOpen = false;
+let quizFileSelectionMenuOpen = false;
 let persistenceTimer = null;
 let liveRefreshTimer = null;
 let teacherDeadlineTimer = null;
@@ -444,12 +445,44 @@ function app() {
   if (studentDirectoryTable && studentDirectoryScrollTop !== undefined) {
     studentDirectoryTable.scrollTop = studentDirectoryScrollTop;
   }
+  renderQuizFileSelectDropdown();
   updateStudentLastSeenCells();
   updateImportedFileControls();
   saveWindowSession();
   restoreTeacherDrafts();
   bindEvents();
   updateSelectedStudentAccountControls();
+}
+function renderQuizFileSelectDropdown() {
+  const select = document.querySelector('#result-file-select');
+  if (!select) {
+    quizFileSelectionMenuOpen = false;
+    return;
+  }
+  const menu = document.createElement('details');
+  menu.className = 'quiz-file-select-menu';
+  menu.open = quizFileSelectionMenuOpen;
+  const summary = document.createElement('summary');
+  summary.textContent = select.selectedOptions[0]?.textContent || 'Select quiz file';
+  summary.addEventListener('click', () => { quizFileSelectionMenuOpen = !quizFileSelectionMenuOpen; });
+  const options = document.createElement('div');
+  options.className = 'quiz-file-select-options';
+  for (const option of select.options) {
+    const choice = document.createElement('button');
+    choice.type = 'button';
+    choice.className = 'quiz-file-select-option';
+    choice.textContent = option.textContent;
+    choice.setAttribute('aria-pressed', String(option.selected));
+    choice.addEventListener('click', () => {
+      selectedResultFileId = option.value;
+      quizFileSelectionMenuOpen = false;
+      app();
+    });
+    options.append(choice);
+  }
+  menu.append(summary, options);
+  menu.addEventListener('toggle', () => { quizFileSelectionMenuOpen = menu.open; });
+  select.replaceWith(menu);
 }
 function updateStudentLastSeenCells() {
   if (session?.role !== 'teacher' || teacherView !== 'users') return;
@@ -1372,7 +1405,6 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
   const clearActivity = document.querySelector('[data-action="clear-activity"]'); if (clearActivity) clearActivity.addEventListener('click', clearRecentActivity);
   const startQuiz = document.querySelector('[data-action="start-quiz"]'); if (startQuiz) startQuiz.addEventListener('click', startStudentQuiz);
   const retryResultSave = document.querySelector('[data-action="retry-result-save"]'); if (retryResultSave) retryResultSave.addEventListener('click', () => { if (session?.resultSyncPending) void finishQuiz(Boolean(session.resultAutoSubmitted)); });
-  const resultSelect = document.querySelector('#result-file-select'); if (resultSelect) resultSelect.addEventListener('change', () => { selectedResultFileId = resultSelect.value; app(); });
   const addChoice = document.querySelector('[data-action="add-choice"]'); if (addChoice) addChoice.addEventListener('click', () => { const choices = document.querySelectorAll('[data-choice]'); const index = choices.length; if (index >= 8) return showToast('A question can have up to 8 choices.'); document.querySelector('#choices').insertAdjacentHTML('beforeend', choiceInput(index)); const row = document.querySelectorAll('.choice-row')[index]; row.querySelector('[data-action="remove-choice"]').addEventListener('click', () => { row.remove(); renumberChoices(); }); syncCorrectOptions(); updateChoiceCount(); });
   document.querySelectorAll('[data-action="remove-choice"]').forEach(button => button.addEventListener('click', () => { const choices = document.querySelectorAll('[data-choice]'); if (choices.length <= 2) return showToast('Keep at least two choices.'); button.closest('.choice-row').remove(); renumberChoices(); }));
   document.querySelectorAll('[data-answer]').forEach(button => button.addEventListener('click', () => { if (!session || session.completed || state.quizStopped) return; if (!session.feedback) { session.selected = Number(button.dataset.answer); saveStudentSession(); app(); } }));
