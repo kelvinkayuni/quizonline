@@ -2,7 +2,7 @@ function courseDisplayValue(value) { const normalized = String(value || '').trim
 function studentCourseDetails() { const courseName = courseDisplayValue(state.config.courseName); const courseCode = courseDisplayValue(state.config.courseCode); return courseName || courseCode ? `<div class="course-banner">${courseName ? `<strong>${esc(courseName)}</strong>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''; }
 import { supabase } from './supabase.js';
 import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, deleteTeacherQuizQuestionHistory, hydrateQuizState, listTeacherQuizQuestionHistory, loadStudentQuizReport, loadStudentQuizResult, loadTeacherQuizQuestionHistory, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizConfiguration, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAccessChange, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt } from './supabaseStore.js';
-import { loadLiveStudentUsernames, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
+import { loadStudentPresence, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { SHORT_ANSWER_FULL_CREDIT_THRESHOLD, roundToOneDecimal, shortAnswerMarksAwarded, shortAnswerMatchScore } from './shortAnswerMatching.js';
 import { assignUniqueStudentQuestionOrders } from './studentQuestionOrders.js';
 let shortAnswerSubmissionInProgress = false;
@@ -439,10 +439,23 @@ function app() {
   document.querySelector('#app').innerHTML = session
     ? (session.role === 'teacher' ? teacherApp() : (session.completed ? studentApp() : (session.started ? studentApp() : studentQuizLobby())))
     : loginApp();
+  updateStudentLastSeenCells();
   saveWindowSession();
   restoreTeacherDrafts();
   bindEvents();
   updateSelectedStudentAccountControls();
+}
+function updateStudentLastSeenCells() {
+  if (session?.role !== 'teacher' || teacherView !== 'users') return;
+  const usersByUsername = new Map(state.users.map(user => [user.username, user]));
+  document.querySelectorAll('.student-account-actions + .table-wrap tbody tr').forEach(row => {
+    const user = usersByUsername.get(row.cells[1]?.textContent?.trim());
+    const lastSeenCell = row.cells[4];
+    if (!user || !lastSeenCell) return;
+    lastSeenCell.textContent = user.status === 'online'
+      ? '........'
+      : user.lastSeen ? formatDate(user.lastSeen) : '—';
+  });
 }
 function clearStudentAttemptClaim() {
   session.attemptGeneration = null;
@@ -511,13 +524,12 @@ function revokeStudentAccess() {
 function liveStudents() { const online = state.users.filter(user => user.status === 'online'); if (!online.length) return '<div class="empty">No students are currently signed in.</div>'; return `<div class="activity">${online.map(user => `<div class="activity-item"><span class="activity-icon">${icon('pulse')}</span><div><strong>${esc(user.username)}</strong><br><span class="subtle">Signed in</span></div><span class="status">Online</span></div>`).join('')}</div>`; }
 async function refreshLiveStudents() {
   if (!session || session.role !== 'teacher') return;
-  const liveUsernames = await loadLiveStudentUsernames();
-  if (!liveUsernames) return;
-  const now = new Date().toISOString();
+  const studentPresence = await loadStudentPresence();
+  if (!studentPresence) return;
   state.users = state.users.map(user => ({
     ...user,
-    status: liveUsernames.has(user.username) ? 'online' : 'offline',
-    lastSeen: liveUsernames.has(user.username) ? user.lastSeen || now : user.lastSeen
+    status: studentPresence.get(user.username)?.online ? 'online' : 'offline',
+    lastSeen: studentPresence.get(user.username)?.lastSeen || null
   }));
   if (teacherView === 'overview' || teacherView === 'results') app();
 }
