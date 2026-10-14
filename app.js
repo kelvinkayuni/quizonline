@@ -1430,6 +1430,36 @@ async function handleLogin(event) {
     ? state.users.find(user => user.username === importedUsername && user.password === password)
     : null;
   if (!student) return showToast('Incorrect Username or Password');
+  let currentQuizConfig;
+  try {
+    const { data, error } = await supabase.from('quiz_config')
+      .select('quiz_id, published, stopped, start_time, end_time, total_questions, duration, course_name, course_code')
+      .eq('id', 1)
+      .maybeSingle();
+    if (error) throw error;
+    currentQuizConfig = data;
+  } catch (error) {
+    showToast(`Quiz status could not be checked: ${error.message || error}`, 'error');
+    return;
+  }
+  state.currentQuizId = currentQuizConfig?.quiz_id ?? null;
+  state.quizStopped = Boolean(currentQuizConfig?.stopped);
+  state.questionsPublished = Boolean(currentQuizConfig?.published) && !state.quizStopped;
+  state.config = {
+    ...state.config,
+    courseName: cleanLiveCourseValue(currentQuizConfig?.course_name, 'Course'),
+    courseCode: cleanLiveCourseValue(currentQuizConfig?.course_code, '34'),
+    totalQuestions: Number(currentQuizConfig?.total_questions) || 0,
+    duration: Number(currentQuizConfig?.duration) || 0,
+    start: toDateTimeLocal(currentQuizConfig?.start_time),
+    end: toDateTimeLocal(currentQuizConfig?.end_time)
+  };
+  const quizRequiresQuestionOrder = Boolean(
+    state.questionsPublished
+      && state.currentQuizId
+      && !state.quizStopped
+      && !quizHasEnded()
+  );
   let previous = null;
   if (state.questionsPublished && state.currentQuizId) {
     try {
@@ -1455,8 +1485,10 @@ async function handleLogin(event) {
       && savedOrderBelongsToQuiz
       ? savedSession.questionOrderIds.map(id => originalQuestions.find(question => question.id === id)).filter(Boolean)
       : [];
-  const assignedOrder = assignedStudentQuestionOrder(username, state.currentQuizId, originalQuestions);
-  const assignmentsExist = hasUniqueStudentQuestionOrders(state.currentQuizId);
+  const assignedOrder = quizRequiresQuestionOrder
+    ? assignedStudentQuestionOrder(username, state.currentQuizId, originalQuestions)
+    : [];
+  const assignmentsExist = quizRequiresQuestionOrder && hasUniqueStudentQuestionOrders(state.currentQuizId);
   if (assignmentsExist && assignedOrder.length !== originalQuestions.length) {
     return showToast('No unique question order is assigned to this account. Ask the teacher to update the student roster and submit the quiz again.', 'error');
   }
@@ -1479,7 +1511,7 @@ async function handleLogin(event) {
       answers: [],
       started: false
     };
-  if (state.questionsPublished && state.currentQuizId) {
+  if (quizRequiresQuestionOrder) {
     try {
       const claimedAttempt = await claimStudentAttempt(state.currentQuizId, student.username, password, initialSession);
       if (claimedAttempt.completed) {
