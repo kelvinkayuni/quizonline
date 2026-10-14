@@ -1384,7 +1384,7 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
   document.querySelectorAll('#question-form input, #question-form textarea, #question-form select, #config-form input, #config-form select').forEach(field => field.addEventListener('input', () => saveTeacherDraft(field.form)));
   const cancelEdit = document.querySelector('[data-action="cancel-edit"]'); if (cancelEdit) cancelEdit.addEventListener('click', () => { editingQuestionId = null; app(); });
   document.querySelectorAll('[data-action="edit-question"]').forEach(button => button.addEventListener('click', () => { editingQuestionId = button.dataset.id; app(); }));
-  document.querySelectorAll('[data-action="delete-question"]').forEach(button => button.addEventListener('click', () => deleteQuestion(button.dataset.id)));
+  document.querySelectorAll('[data-action="delete-question"]').forEach(button => button.addEventListener('click', () => deleteQuestion(button.dataset.id, button)));
   document.querySelectorAll('[data-action="expand-question"]').forEach(button => button.addEventListener('click', () => { const id = button.dataset.id; if (expandedQuestionIds.has(id)) expandedQuestionIds.delete(id); else expandedQuestionIds.add(id); const details = document.querySelector(`#details-${id}`); details.classList.toggle('expanded'); button.textContent = details.classList.contains('expanded') ? 'Collapse' : 'Expand'; }));
   const downloadCorrectionsButton = document.querySelector('[data-action="download-corrections"]'); if (downloadCorrectionsButton) downloadCorrectionsButton.addEventListener('click', downloadCorrectionsPdf);
   const viewQuestionHistory = document.querySelector('[data-action="view-question-history"]'); if (viewQuestionHistory) viewQuestionHistory.addEventListener('click', () => { void toggleTeacherQuestionHistory(); });
@@ -1803,7 +1803,7 @@ function resumePendingMultipleChoiceSaves() {
     );
   });
 }
-async function deleteQuestion(id) {
+async function deleteQuestion(id, button = null) {
   if (quizIsLocked()) return showToast('Stop the quiz before changing questions.');
   if (teacherMutationInFlight) return;
   if (!state.questions.some(question => question.id === id)) return showToast('This question is no longer in the question bank.');
@@ -1820,6 +1820,10 @@ async function deleteQuestion(id) {
     activity: structuredClone(state.activity)
   };
   teacherMutationInFlight = true;
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Deleting...';
+  }
 
   try {
     state.questions = state.questions.filter(question => question.id !== id);
@@ -1859,6 +1863,11 @@ async function clearAllQuestions() {
   if (quizIsLocked() || teacherMutationInFlight) return showToast('Stop the quiz before changing questions.');
   const previousState = structuredClone(state);
   teacherMutationInFlight = true;
+  const clearButton = document.querySelector('[data-action="clear-questions"]');
+  if (clearButton) {
+    clearButton.disabled = true;
+    clearButton.textContent = 'Clearing...';
+  }
   try {
     state.questions = [];
     state.questionsPublished = false;
