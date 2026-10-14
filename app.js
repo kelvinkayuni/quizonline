@@ -440,6 +440,7 @@ function app() {
     ? (session.role === 'teacher' ? teacherApp() : (session.completed ? studentApp() : (session.started ? studentApp() : studentQuizLobby())))
     : loginApp();
   updateStudentLastSeenCells();
+  updateImportedFileControls();
   saveWindowSession();
   restoreTeacherDrafts();
   bindEvents();
@@ -456,6 +457,17 @@ function updateStudentLastSeenCells() {
       ? '........'
       : user.lastSeen ? formatDate(user.lastSeen) : '—';
   });
+}
+function updateImportedFileControls() {
+  if (session?.role !== 'teacher' || teacherView !== 'users') return;
+  const quizLocked = quizIsLocked();
+  const disabled = Boolean((state.importedFile && state.studentLoginActive) || quizLocked);
+  const upload = document.querySelector('#user-upload');
+  const deleteUpload = document.querySelector('[data-action="delete-upload"]');
+  const hint = upload?.closest('.panel')?.querySelector('.hint');
+  if (upload) upload.disabled = disabled;
+  if (deleteUpload) deleteUpload.disabled = disabled;
+  if (quizLocked && hint) hint.textContent = 'Delete and replace are disabled while a quiz is active or being published.';
 }
 function clearStudentAttemptClaim() {
   session.attemptGeneration = null;
@@ -1339,8 +1351,8 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
   const stopQuiz = document.querySelector('[data-action="stop-quiz"]'); if (stopQuiz) stopQuiz.addEventListener('click', stopQuizForEveryone);
   const configForm = document.querySelector('#config-form'); if (configForm) configForm.addEventListener('submit', saveConfig);
   const resetConfig = document.querySelector('[data-action="reset-config"]'); if (resetConfig) resetConfig.addEventListener('click', resetQuizConfig);
-  const upload = document.querySelector('#user-upload'); if (upload) upload.addEventListener('change', importUsers);
-  const deleteUpload = document.querySelector('[data-action="delete-upload"]'); if (deleteUpload) deleteUpload.addEventListener('click', deleteUploadedFile);
+  const upload = document.querySelector('#user-upload'); if (upload) upload.addEventListener('change', event => { if (quizIsLocked()) { event.currentTarget.value = ''; return; } void importUsers(event); });
+  const deleteUpload = document.querySelector('[data-action="delete-upload"]'); if (deleteUpload) deleteUpload.addEventListener('click', () => { if (quizIsLocked()) return; void deleteUploadedFile(); });
   const toggleStudentLogin = document.querySelector('[data-action="toggle-student-login"]'); if (toggleStudentLogin) toggleStudentLogin.addEventListener('click', updateMasterStudentLoginAccess);
   const activateSelectedStudents = document.querySelector('[data-action="activate-selected-students"]'); if (activateSelectedStudents) activateSelectedStudents.addEventListener('click', () => { void updateSelectedStudentAccess(true); });
   const deactivateSelectedStudents = document.querySelector('[data-action="deactivate-selected-students"]'); if (deactivateSelectedStudents) deactivateSelectedStudents.addEventListener('click', () => { void updateSelectedStudentAccess(false); });
