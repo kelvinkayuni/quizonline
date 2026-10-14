@@ -1,10 +1,11 @@
 function courseDisplayValue(value) { const normalized = String(value || '').trim(); return normalized === '34' || normalized.toLowerCase() === 'course' ? '' : normalized; }
 function studentCourseDetails() { const courseName = courseDisplayValue(state.config.courseName); const courseCode = courseDisplayValue(state.config.courseCode); return courseName || courseCode ? `<div class="course-banner">${courseName ? `<strong>${esc(courseName)}</strong>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''; }
 import { supabase } from './supabase.js';
-import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, deleteTeacherQuizQuestionHistory, hydrateQuizState, listTeacherQuizQuestionHistory, loadStudentQuizReport, loadStudentQuizResult, loadTeacherQuizQuestionHistory, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizConfiguration, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAccessChange, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt } from './supabaseStore.js';
+import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, deleteTeacherQuizQuestionHistory, hydrateQuizState, listTeacherQuizQuestionHistory, loadStudentQuizReport, loadStudentQuizResult, loadTeacherQuizQuestionHistory, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizConfiguration, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAccessChange, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt, waitForPendingQuestionSaves } from './supabaseStore.js';
 import { loadStudentPresence, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { SHORT_ANSWER_FULL_CREDIT_THRESHOLD, roundToOneDecimal, shortAnswerMarksAwarded, shortAnswerMatchScore } from './shortAnswerMatching.js';
 import { assignUniqueStudentQuestionOrders } from './studentQuestionOrders.js';
+import { ensureQuestionPersistenceId, getPublishedQuestionSnapshot } from './questionPersistence.js';
 let shortAnswerSubmissionInProgress = false;
 
 async function refreshStudentQuizState() {
@@ -586,14 +587,14 @@ async function refreshLiveStudents() {
 async function refreshTeacherQuizState() { if (!session || session.role !== 'teacher' || teacherMutationInFlight) return; const { data, error } = await supabase.from('quiz_config').select('quiz_id, published, stopped, total_questions, duration, start_time, end_time, course_name, course_code').eq('id', 1).maybeSingle(); if (error || !data) return; const nextQuizId = data.quiz_id || null; const nextStopped = Boolean(data.stopped); const nextPublished = Boolean(data.published) && !nextStopped; const nextConfig = { ...state.config, courseName: data.course_name || '', courseCode: data.course_code || '', totalQuestions: Number(data.total_questions) || 0, duration: Number(data.duration) || 0, start: toDateTimeLocal(data.start_time), end: toDateTimeLocal(data.end_time) }; const changed = state.currentQuizId !== nextQuizId || state.quizStopped !== nextStopped || state.questionsPublished !== nextPublished || state.config.totalQuestions !== nextConfig.totalQuestions || state.config.duration !== nextConfig.duration || state.config.start !== nextConfig.start || state.config.end !== nextConfig.end; if (!changed) return; state.currentQuizId = nextQuizId; state.quizStopped = nextStopped; state.questionsPublished = nextPublished; state.config = nextConfig; if (teacherView === 'questions' || teacherView === 'overview') app(); }
 async function refreshStudentQuizStateRaw() {
   if (!session || session.role !== 'student') return;
-  const [configResult, questionsResult, workspaceResult] = await Promise.all([
+  const [configResult, workspaceResult] = await Promise.all([
     supabase.from('quiz_config').select('quiz_id, published, stopped, total_questions, duration, start_time, end_time, course_name, course_code').eq('id', 1).maybeSingle(),
-    supabase.from('questions').select('*').order('created_at'),
     supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle()
   ]);
-  if (questionsResult.error) return;
+  if (configResult.error || workspaceResult.error) return;
   const config = configResult.data;
   const workspace = workspaceResult.data?.data || {};
+  const publishedQuestions = getPublishedQuestionSnapshot(config, workspace);
   const previousQuizId = state.currentQuizId;
   const previousStopped = state.quizStopped;
   const previousPublished = state.questionsPublished;
@@ -623,10 +624,13 @@ async function refreshStudentQuizStateRaw() {
     const quizId = file.id?.startsWith('quiz-') ? file.id.slice(5) : '';
     return !quizId || !deletedQuizIds.has(quizId);
   });
-  state.questions = questionsResult.data.map(normalizeQuestion);
+  state.questions = (publishedQuestions || []).map(question => ({
+    ...question,
+    choices: Array.isArray(question.choices) ? question.choices : []
+  }));
   state.currentQuizId = config?.quiz_id || null;
   state.quizStopped = Boolean(config?.stopped);
-  state.questionsPublished = Boolean(config?.published) && !state.quizStopped && state.questions.length > 0;
+  state.questionsPublished = Boolean(publishedQuestions?.length);
   state.config = {
     ...state.config,
     courseName: config?.course_name || workspace.courseName || state.config.courseName || '',
@@ -1194,6 +1198,8 @@ async function publishQuestionsForStudents() {
   if (!state.config.totalQuestions || !state.config.duration) return showToast('Save quiz configuration before submitting questions.');
   if (quizHasEnded()) return showToast('The quiz end time has passed. Update Quiz configuration, then submit again.');
 
+  await waitForPendingQuestionSaves();
+
   const submittedQuizId = `quiz-${Date.now()}`;
   let studentQuestionOrders;
   try {
@@ -1218,18 +1224,14 @@ async function publishQuestionsForStudents() {
   saveState({ localOnly: true });
   app();
 
-  let syncError = null;
   try {
     await persistQuizState(state, 'teacher', { waitForSync: true, skipConfig: true });
-  } catch (error) {
-    syncError = error;
-  }
-  try {
     await publishQuizAtomically(state, submittedQuizId);
   } catch (error) {
-    syncError = syncError || error;
+    await finishQuizPublicationCheck(submittedQuizId, error);
+    return;
   }
-  await finishQuizPublicationCheck(submittedQuizId, syncError);
+  await finishQuizPublicationCheck(submittedQuizId);
 }
 async function checkPendingQuizPublication() {
   const quizId = state.publishConfirmationPending;
@@ -1446,7 +1448,7 @@ async function handleLogin(event) {
     session = { role: 'teacher', username: TEACHER.username };
     recordTeacherActivity();
     teacherView = 'overview';
-    resumePendingMultipleChoiceSaves();
+    resumePendingQuestionSaves();
     app();
     return;
   }
@@ -1741,11 +1743,12 @@ async function saveQuestion(event) {
 }
 
 function saveQuestionLocally(question) {
-  const existingIndex = state.questions.findIndex(item => item.id === question.id);
+  const existingIndex = state.questions.findIndex(item => item.id === question.id || item.localId === question.id);
   const existing = existingIndex >= 0 ? state.questions[existingIndex] : null;
   const localId = existing?.localId || existing?.id || question.id;
   const version = (existing?.syncVersion || 0) + 1;
-  const savedLocally = { ...question, metadataUpdatedAt: new Date().toISOString(), localId, syncVersion: version, syncStatus: 'pending', syncError: '' };
+  const savedLocally = { ...question, id: existing?.id || question.id, metadataUpdatedAt: new Date().toISOString(), localId, syncVersion: version, syncStatus: 'pending', syncError: '' };
+  ensureQuestionPersistenceId(savedLocally);
   if (existingIndex >= 0) state.questions[existingIndex] = savedLocally;
   else state.questions.push(savedLocally);
 
@@ -1791,10 +1794,10 @@ async function syncQuestionInBackground(localId, version, questionNumber, questi
   }
   app();
 }
-function resumePendingMultipleChoiceSaves() {
+function resumePendingQuestionSaves() {
   if (session?.role !== 'teacher') return;
   state.questions.forEach((question, index) => {
-    if (question.type === 'short-answer' || question.syncStatus !== 'pending') return;
+    if (question.syncStatus !== 'pending') return;
     void syncQuestionInBackground(
       question.localId || question.id,
       question.syncVersion || 1,
@@ -1869,6 +1872,7 @@ async function clearAllQuestions() {
     clearButton.textContent = 'Clearing...';
   }
   try {
+    await waitForPendingQuestionSaves();
     state.questions = [];
     state.questionsPublished = false;
     state.quizStopped = false;
@@ -2717,7 +2721,7 @@ stateHydrationPromise = (async () => {
   app();
   if (session?.role === 'teacher') {
     startTeacherInactivityTracking();
-    resumePendingMultipleChoiceSaves();
+    resumePendingQuestionSaves();
     if (state.publishConfirmationPending) {
       teacherMutationInFlight = true;
       app();
