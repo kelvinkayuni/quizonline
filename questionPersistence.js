@@ -1,5 +1,11 @@
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+export function normalizeQuestionType(type) {
+  if (type == null || type === '') return 'multiple-choice';
+  if (type === 'multiple-choice' || type === 'short-answer') return type;
+  throw new Error('A supported question type is required for this save operation.');
+}
+
 export function ensureQuestionPersistenceId(question) {
   if (!question || typeof question !== 'object') {
     throw new Error('A question is required before it can be saved.');

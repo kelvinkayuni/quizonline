@@ -1731,6 +1731,7 @@ async function saveQuestion(event) {
   const id = data.get('id') || `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const question = {
     id,
+    type: 'multiple-choice',
     text: String(data.get('text') || '').trim(),
     choices,
     correct,

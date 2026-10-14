@@ -1,6 +1,6 @@
 import { supabase } from './supabase.js';
 import { roundToOneDecimal } from './shortAnswerMatching.js';
-import { ensureQuestionPersistenceId, getPublishedQuestionSnapshot } from './questionPersistence.js';
+import { ensureQuestionPersistenceId, getPublishedQuestionSnapshot, normalizeQuestionType } from './questionPersistence.js';
 
 let persistenceEnabled = false;
 let syncQueue = Promise.resolve();
@@ -699,8 +699,14 @@ export async function hydrateQuizState(state, role = 'teacher', persist = true, 
 export function persistQuestionToSupabase(question, localId) {
   const saveKey = localId || question?.id;
   if (!saveKey) return Promise.reject(new Error('The question has no save identifier.'));
-  if (!question || !['multiple-choice', 'short-answer'].includes(question.type)) {
-    return Promise.reject(new Error('A supported question type is required for this save operation.'));
+  if (!question || typeof question !== 'object') {
+    return Promise.reject(new Error('A question is required for this save operation.'));
+  }
+  let questionType;
+  try {
+    questionType = normalizeQuestionType(question.type);
+  } catch (error) {
+    return Promise.reject(error);
   }
 
   let remoteId = questionIdAliases.get(saveKey);
@@ -714,7 +720,7 @@ export function persistQuestionToSupabase(question, localId) {
 
   const previousSave = questionRowSaveQueues.get(saveKey) || Promise.resolve();
   const operation = previousSave.then(async () => {
-    const shortAnswer = question.type === 'short-answer';
+    const shortAnswer = questionType === 'short-answer';
     const payload = {
       id: remoteId,
       text: question.text,
