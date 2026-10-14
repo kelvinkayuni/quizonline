@@ -433,29 +433,6 @@ function ensureStudentQuestionOrder() {
 }
 function app() {
   const studentDirectoryScrollTop = document.querySelector('.student-account-actions + .table-wrap')?.scrollTop;
-  const questionListScrollTop = document.querySelector('#question-list')?.scrollTop;
-  const activeQuestionForm = session?.role === 'teacher' && teacherView === 'questions'
-    ? document.activeElement?.closest('#question-form, #short-answer-form')
-    : null;
-  const activeQuestionField = activeQuestionForm?.contains(document.activeElement) ? document.activeElement : null;
-  const activeQuestionFieldName = activeQuestionField?.name || '';
-  const activeQuestionFieldIndex = activeQuestionFieldName
-    ? [...activeQuestionForm.querySelectorAll('[name]')]
-      .filter(field => field.name === activeQuestionFieldName)
-      .indexOf(activeQuestionField)
-    : -1;
-  const activeQuestionFieldId = activeQuestionField?.id || '';
-  let activeQuestionTextSelection = null;
-  try {
-    if (typeof activeQuestionField?.selectionStart === 'number') {
-      activeQuestionTextSelection = {
-        start: activeQuestionField.selectionStart,
-        end: activeQuestionField.selectionEnd,
-        direction: activeQuestionField.selectionDirection
-      };
-    }
-  } catch {}
-  if (activeQuestionForm) saveTeacherDraft(activeQuestionForm);
   if (session && !stateHydrated) {
     document.querySelector('#app').innerHTML = '<main class="main"><div class="quiz-shell"><section class="card result-hero"><div class="eyebrow">Connecting</div><h2>Loading the current workspace...</h2></section></div></main>';
     return;
@@ -475,28 +452,6 @@ function app() {
   restoreTeacherDrafts();
   bindEvents();
   updateSelectedStudentAccountControls();
-  if (activeQuestionForm) {
-    const restoredForm = document.getElementById(activeQuestionForm.id);
-    const matchingFields = [...(restoredForm?.querySelectorAll('[name]') || [])]
-      .filter(field => field.name === activeQuestionFieldName);
-    const restoredField = matchingFields[activeQuestionFieldIndex] || (activeQuestionFieldId
-      ? document.getElementById(activeQuestionFieldId)
-      : null);
-    restoredField?.focus({ preventScroll: true });
-    if (activeQuestionTextSelection && typeof restoredField?.setSelectionRange === 'function') {
-      try {
-        restoredField.setSelectionRange(
-          activeQuestionTextSelection.start,
-          activeQuestionTextSelection.end,
-          activeQuestionTextSelection.direction
-        );
-      } catch {}
-    }
-  }
-  const restoredQuestionList = document.querySelector('#question-list');
-  if (restoredQuestionList && questionListScrollTop !== undefined) {
-    restoredQuestionList.scrollTop = questionListScrollTop;
-  }
 }
 function renderQuizFileSelectDropdown() {
   const select = document.querySelector('#result-file-select');
@@ -1332,15 +1287,13 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
   clearInterval(studentQuizRefreshTimer);
   if (session?.role === 'teacher') {
     liveRefreshTimer = setInterval(async () => {
-      if (teacherMutationInFlight) return;
+      if (teacherMutationInFlight || (teacherView === 'questions' && document.querySelector('#question-form'))) return;
       const refreshVersion = teacherWorkspaceMutationVersion;
       await refreshTeacherQuizState();
       await hydrateQuizState(state, 'teacher', false, '', () => !teacherMutationInFlight && refreshVersion === teacherWorkspaceMutationVersion);
       cacheHydratedState();
       await refreshLiveStudents();
-      const activeTeacherQuestionForm = teacherView === 'questions'
-        && document.activeElement?.closest('#question-form, #short-answer-form');
-      if (!teacherMutationInFlight && (!document.activeElement?.closest('form') || activeTeacherQuestionForm)) app();
+      if (!teacherMutationInFlight && !document.activeElement?.closest('form')) app();
     }, 5000);
     if (state.questionsPublished && !state.quizStopped && state.config.end) {
       teacherDeadlineTimer = setInterval(() => { if (quizHasEnded()) void expireQuizDueToTime(); }, 1000);
