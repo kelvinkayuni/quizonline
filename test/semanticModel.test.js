@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { compareSemanticText, createSemanticMap, normalizeCorpusText, tokenizeSemanticText, trainSemanticModel } from '../semanticModel.js';
+import { compareSemanticText, createSemanticMap, normalizeCorpusText, normalizeSemanticWord, tokenizeSemanticText, trainSemanticModel } from '../semanticModel.js';
 
 test('semantic tokenization keeps negation and selected short terms but drops stopwords', () => {
   assert.deepEqual(
@@ -12,6 +12,24 @@ test('semantic tokenization keeps negation and selected short terms but drops st
 test('possessives do not produce malformed apostrophe terms', () => {
   assert.deepEqual(tokenizeSemanticText("it's"), []);
   assert.deepEqual(tokenizeSemanticText("student's"), ['student']);
+});
+
+test('non-similar rules accept one word including stopwords and negated words', () => {
+  assert.equal(normalizeSemanticWord('is'), 'is');
+  assert.equal(normalizeSemanticWord("isn't"), "isn't");
+  assert.equal(normalizeSemanticWord('not a word pair'), '');
+});
+
+test('saved non-similar word pairs override cosine comparison in either order', () => {
+  const model = trainSemanticModel([{ text_content: 'Gemstones are studied. Gemstones are researched. Study describes gemstones. Research describes gemstones.' }]);
+  const result = compareSemanticText(
+    model,
+    "isn't the study of gemstones",
+    'is the study of gemstones',
+    [{ word_a: "isn't", word_b: 'is' }]
+  );
+  assert.equal(result.score, 0);
+  assert.equal(result.nonSimilarPairMatched, true);
 });
 
 test('negation reverses the next term in a semantic comparison', () => {

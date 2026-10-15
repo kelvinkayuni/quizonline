@@ -3,6 +3,7 @@ import { supabase } from './supabase.js';
 const TABLE = 'semantic_cartographer_documents';
 const GLOSSARY_TABLE = 'semantic_cartographer_glossary';
 const COORDINATES_TABLE = 'semantic_cartographer_coordinates';
+const NON_SIMILAR_PAIRS_TABLE = 'semantic_cartographer_non_similar_pairs';
 const MAX_FILE_BYTES = 12 * 1024 * 1024;
 
 export async function extractCartographerFile(file) {
@@ -56,6 +57,21 @@ export async function insertCartographerGlossaryEntry(entry) {
 export async function removeCartographerGlossaryEntry(id) {
   const { error } = await supabase.from(GLOSSARY_TABLE).delete().eq('id', id);
   if (error) throw new Error(error.message);
+}
+
+export async function listCartographerNonSimilarPairs() {
+  const { data, error } = await supabase.from(NON_SIMILAR_PAIRS_TABLE).select('word_a, word_b').order('word_a');
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+export async function insertCartographerNonSimilarPair(pair) {
+  const { data, error } = await supabase.from(NON_SIMILAR_PAIRS_TABLE).insert(pair).select('word_a, word_b').single();
+  if (error) {
+    if (error.code === '23505') throw new Error('That non-similar word pair is already saved.');
+    throw new Error(error.message);
+  }
+  return data;
 }
 
 export async function listCartographerCoordinates() {

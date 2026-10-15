@@ -1,8 +1,8 @@
 function courseDisplayValue(value) { const normalized = String(value || '').trim(); return normalized === '34' || normalized.toLowerCase() === 'course' ? '' : normalized; }
 function studentCourseDetails() { const courseName = courseDisplayValue(state.config.courseName); const courseCode = courseDisplayValue(state.config.courseCode); return courseName || courseCode ? `<div class="course-banner">${courseName ? `<strong>${esc(courseName)}</strong>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''; }
 import { supabase } from './supabase.js';
-import { extractCartographerFile, insertCartographerDocument, insertCartographerGlossaryEntry, listCartographerCoordinates, listCartographerDocuments, listCartographerGlossary, removeCartographerDocument, removeCartographerGlossaryEntry, saveCartographerCoordinates } from './semanticCorpus.js';
-import { compareSemanticText, createSemanticMap, normalizeCorpusText, tokenizeSemanticText, trainSemanticModel } from './semanticModel.js';
+import { extractCartographerFile, insertCartographerDocument, insertCartographerGlossaryEntry, insertCartographerNonSimilarPair, listCartographerCoordinates, listCartographerDocuments, listCartographerGlossary, listCartographerNonSimilarPairs, removeCartographerDocument, removeCartographerGlossaryEntry, saveCartographerCoordinates } from './semanticCorpus.js';
+import { compareSemanticText, createSemanticMap, normalizeCorpusText, normalizeSemanticWord, tokenizeSemanticText, trainSemanticModel } from './semanticModel.js';
 import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, deleteTeacherQuizQuestionHistory, hydrateQuizState, listTeacherQuizQuestionHistory, loadStudentQuizReport, loadStudentQuizResult, loadTeacherQuizQuestionHistory, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizConfiguration, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAccessChange, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt, waitForPendingQuestionSaves } from './supabaseStore.js';
 import { loadStudentPresence, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { SHORT_ANSWER_FULL_CREDIT_THRESHOLD, roundToOneDecimal, shortAnswerMarksAwarded, shortAnswerMatchScore } from './shortAnswerMatching.js';
@@ -213,6 +213,7 @@ if (!state.importedFile) { state.users = []; saveState(); }
 let teacherView = 'overview';
 let cartographerDocuments = [];
 let cartographerGlossary = [];
+let cartographerNonSimilarPairs = [];
 let cartographerCoordinates = [];
 let cartographerSignature = '';
 let cartographerModel = null;
@@ -589,6 +590,8 @@ function captureCartographerRefreshState() {
     textB: document.querySelector('#cartographer-text-b')?.value,
     alias: document.querySelector('#cartographer-alias')?.value,
     canonical: document.querySelector('#cartographer-canonical')?.value,
+    nonSimilarWordA: document.querySelector('#cartographer-non-similar-word-a')?.value,
+    nonSimilarWordB: document.querySelector('#cartographer-non-similar-word-b')?.value,
     glossaryScrollTop: document.querySelector('.cartographer-glossary-list')?.scrollTop
   };
 }
@@ -597,7 +600,9 @@ function restoreCartographerRefreshState(refreshState) {
     ['#cartographer-text-a', refreshState.textA],
     ['#cartographer-text-b', refreshState.textB],
     ['#cartographer-alias', refreshState.alias],
-    ['#cartographer-canonical', refreshState.canonical]
+    ['#cartographer-canonical', refreshState.canonical],
+    ['#cartographer-non-similar-word-a', refreshState.nonSimilarWordA],
+    ['#cartographer-non-similar-word-b', refreshState.nonSimilarWordB]
   ]) {
     const field = document.querySelector(selector);
     if (field && value !== undefined) field.value = value;
@@ -613,7 +618,7 @@ async function loadCartographerCorpus() {
   cartographerLoadError = '';
   app();
   try {
-    [cartographerDocuments, cartographerGlossary, cartographerCoordinates] = await Promise.all([listCartographerDocuments(), listCartographerGlossary(), listCartographerCoordinates()]);
+    [cartographerDocuments, cartographerGlossary, cartographerCoordinates, cartographerNonSimilarPairs] = await Promise.all([listCartographerDocuments(), listCartographerGlossary(), listCartographerCoordinates(), listCartographerNonSimilarPairs()]);
     await rebuildCartographerModel(true);
     cartographerLoaded = true;
   } catch (error) {
@@ -729,6 +734,20 @@ function injectCartographerCoordinatePlane() {
   addLabel('Y', plotX(0), 36, 'cartographer-axis-label');
   svg.prepend(layer);
 }
+function injectCartographerNonSimilarPairForm() {
+  const glossaryPanel = document.querySelector('.cartographer-glossary-panel');
+  if (!glossaryPanel || document.querySelector('.cartographer-non-similar-panel')) return;
+  glossaryPanel.insertAdjacentHTML('afterend', `<section class="card panel cartographer-non-similar-panel"><div class="panel-head"><div><h2>Non-similar word pairs</h2><p class="subtle">Save two words that should not match each other in comparisons.</p></div></div><form id="cartographer-non-similar-form"><div class="field"><label for="cartographer-non-similar-word-a">Word A</label><input id="cartographer-non-similar-word-a" name="wordA" maxlength="80" placeholder="e.g. isn't" required /></div><div class="field"><label for="cartographer-non-similar-word-b">Word B</label><input id="cartographer-non-similar-word-b" name="wordB" maxlength="80" placeholder="e.g. is" required /></div><button class="btn btn-secondary" type="submit" ${cartographerLoading ? 'disabled' : ''}>Save pair</button></form></section>`);
+}
+function injectCartographerNonSimilarPairNotice() {
+  if (!cartographerResult?.nonSimilarPairMatched) return;
+  const score = document.querySelector('.cartographer-score');
+  if (!score) return;
+  const notice = document.createElement('p');
+  notice.className = 'cartographer-note cartographer-non-similar-notice';
+  notice.textContent = 'A saved non-similar word pair matched; the score was set to 0.';
+  score.append(notice);
+}
 async function saveCartographerGlossaryEntry(alias, canonicalTerm) {
   const aliasTerm = String(alias || '').normalize('NFKC').trim().toLowerCase();
   const canonicalWord = String(canonicalTerm || '').normalize('NFKC').trim().toLowerCase();
@@ -744,6 +763,19 @@ async function saveCartographerGlossaryEntry(alias, canonicalTerm) {
   cartographerGlossary.push(entry);
   await rebuildCartographerModel(true);
   cartographerSelectedWord = '';
+  cartographerResult = null;
+}
+async function saveCartographerNonSimilarPair(inputWordA, inputWordB) {
+  const wordA = normalizeSemanticWord(inputWordA, cartographerGlossary);
+  const wordB = normalizeSemanticWord(inputWordB, cartographerGlossary);
+  if (!wordA || !wordB) throw new Error('Enter one word in each field; phrases and sentences are not accepted.');
+  if (wordA === wordB) throw new Error('Choose two different words after normalization.');
+  const [storedWordA, storedWordB] = wordA < wordB ? [wordA, wordB] : [wordB, wordA];
+  if (cartographerNonSimilarPairs.some(pair => pair.word_a === storedWordA && pair.word_b === storedWordB)) {
+    throw new Error('That non-similar word pair is already saved.');
+  }
+  const pair = await insertCartographerNonSimilarPair({ word_a: storedWordA, word_b: storedWordB });
+  cartographerNonSimilarPairs.push(pair);
   cartographerResult = null;
 }
 async function deleteCartographerGlossaryEntry(id) {
@@ -1632,7 +1664,9 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
   const next = document.querySelector('[data-action="next-question"]'); if (next) next.addEventListener('click', nextQuestion);
   if (session?.role === 'teacher' && teacherView === 'cartographer') {
     injectCartographerGlossary();
+    injectCartographerNonSimilarPairForm();
     injectCartographerCoordinatePlane();
+    injectCartographerNonSimilarPairNotice();
     if (!cartographerLoaded && !cartographerLoading && !cartographerLoadError) void loadCartographerCorpus();
     const reload = document.querySelectorAll('[data-action="cartographer-reload"]');
     reload.forEach(button => button.addEventListener('click', () => { cartographerLoaded = false; cartographerLoadError = ''; void loadCartographerCorpus(); }));
@@ -1672,8 +1706,24 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
     if (compareForm) compareForm.addEventListener('submit', event => {
       event.preventDefault();
       const data = new FormData(compareForm);
-      cartographerResult = { textA: String(data.get('textA') || ''), textB: String(data.get('textB') || ''), ...compareSemanticText(cartographerModel, data.get('textA'), data.get('textB')) };
+      cartographerResult = { textA: String(data.get('textA') || ''), textB: String(data.get('textB') || ''), ...compareSemanticText(cartographerModel, data.get('textA'), data.get('textB'), cartographerNonSimilarPairs) };
       app();
+    });
+    const nonSimilarPairForm = document.querySelector('#cartographer-non-similar-form');
+    if (nonSimilarPairForm) nonSimilarPairForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const data = new FormData(nonSimilarPairForm);
+      const button = event.submitter;
+      if (button) button.disabled = true;
+      try {
+        await saveCartographerNonSimilarPair(data.get('wordA'), data.get('wordB'));
+        nonSimilarPairForm.reset();
+        showToast('Non-similar word pair saved.');
+        app();
+      } catch (error) {
+        showToast(error.message || 'Word pair could not be saved.', 'error');
+        if (button) button.disabled = false;
+      }
     });
     const glossaryForm = document.querySelector('#cartographer-glossary-form');
     if (glossaryForm) glossaryForm.addEventListener('submit', async event => {

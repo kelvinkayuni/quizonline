@@ -27,6 +27,12 @@ function canonicalTerm(word, glossary) {
   return glossary.get(singular) || singular;
 }
 
+export function normalizeSemanticWord(word, glossary = []) {
+  const surface = normalizedSurfaceForm(String(word || '').normalize('NFKC').trim());
+  if (!/^[\p{L}\p{M}]+(?:['-][\p{L}\p{M}]+)*$/u.test(surface)) return '';
+  return canonicalTerm(surface, createGlossaryMap(glossary));
+}
+
 function tokenizeWithSurfaceForms(text, glossary) {
   return (String(text || '').normalize('NFKC').match(/[\p{L}][\p{L}\p{M}'’ʼ\-‐‑‒–—−]*/gu) || [])
     .map(raw => {
@@ -149,6 +155,11 @@ function vectorForText(model, text) {
   return { vector, known: known.size, total: new Set(tokens).size };
 }
 
+function comparisonContainsWord(text, word, glossary) {
+  const words = String(text || '').normalize('NFKC').match(/[\p{L}][\p{L}\p{M}'’ʼ\-‐‑‒–—−]*/gu) || [];
+  return words.some(candidate => normalizeSemanticWord(candidate, glossary) === word);
+}
+
 function cosineSimilarity(vectorA, vectorB) {
   let dot = 0;
   let normA = 0;
@@ -160,13 +171,22 @@ function cosineSimilarity(vectorA, vectorB) {
   return Math.max(0, Math.min(1, dot / Math.sqrt(normA * normB)));
 }
 
-export function compareSemanticText(model, textA, textB) {
+export function compareSemanticText(model, textA, textB, nonSimilarPairs = []) {
   const a = vectorForText(model, textA);
   const b = vectorForText(model, textB);
+  const nonSimilarPairMatched = nonSimilarPairs.some(pair => {
+    const wordA = normalizeSemanticWord(pair.word_a ?? pair.wordA, model?.glossary);
+    const wordB = normalizeSemanticWord(pair.word_b ?? pair.wordB, model?.glossary);
+    return wordA && wordB && (
+      (comparisonContainsWord(textA, wordA, model?.glossary) && comparisonContainsWord(textB, wordB, model?.glossary))
+      || (comparisonContainsWord(textA, wordB, model?.glossary) && comparisonContainsWord(textB, wordA, model?.glossary))
+    );
+  });
   const coverageCount = a.known + b.known;
   const totalCount = a.total + b.total;
   return {
-    score: Math.round(cosineSimilarity(a.vector, b.vector) * 100),
+    score: nonSimilarPairMatched ? 0 : Math.round(cosineSimilarity(a.vector, b.vector) * 100),
+    nonSimilarPairMatched,
     knownA: a.known,
     knownB: b.known,
     coverage: totalCount ? Math.round((coverageCount / totalCount) * 100) : 0
