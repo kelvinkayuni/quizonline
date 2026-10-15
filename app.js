@@ -447,6 +447,7 @@ function ensureStudentQuestionOrder() {
 }
 function app() {
   const studentDirectoryScrollTop = document.querySelector('.student-account-actions + .table-wrap')?.scrollTop;
+  const cartographerRefreshState = session?.role === 'teacher' && teacherView === 'cartographer' ? captureCartographerRefreshState() : null;
   const cartographerMapScroll = document.querySelector('.cartographer-map-scroll');
   const cartographerMapScrollPosition = cartographerMapScroll ? { top: cartographerMapScroll.scrollTop, left: cartographerMapScroll.scrollLeft } : null;
   const cartographerDocumentScrollTop = document.querySelector('.cartographer-document-list')?.scrollTop;
@@ -477,6 +478,7 @@ function app() {
   saveWindowSession();
   restoreTeacherDrafts();
   bindEvents();
+  if (cartographerRefreshState) restoreCartographerRefreshState(cartographerRefreshState);
   updateSelectedStudentAccountControls();
 }
 function renderQuizFileSelectDropdown() {
@@ -607,11 +609,9 @@ function restoreCartographerRefreshState(refreshState) {
 }
 async function loadCartographerCorpus() {
   if (cartographerLoading) return;
-  const refreshState = captureCartographerRefreshState();
   cartographerLoading = true;
   cartographerLoadError = '';
   app();
-  restoreCartographerRefreshState(refreshState);
   try {
     [cartographerDocuments, cartographerGlossary, cartographerCoordinates] = await Promise.all([listCartographerDocuments(), listCartographerGlossary(), listCartographerCoordinates()]);
     await rebuildCartographerModel(true);
@@ -621,7 +621,6 @@ async function loadCartographerCorpus() {
   } finally {
     cartographerLoading = false;
     app();
-    restoreCartographerRefreshState(refreshState);
   }
 }
 function currentCartographerSignature() {
