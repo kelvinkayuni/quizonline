@@ -38,7 +38,7 @@ Create the teacher user in Supabase Auth before running the quiz question histor
 
 The teacher workspace includes a standalone Cartographer for adding PDF or text course material, exploring corpus word associations, and comparing phrases. It does not run during student quizzes and does not change current short-answer marking.
 
-Before using it, run [`supabase-semantic-cartographer.sql`](supabase-semantic-cartographer.sql) in the Supabase SQL Editor. The migration stores extracted text in a separate table protected by the authenticated teacher role. PDF extraction and the experimental word-context model run in the browser; no Gemini API or external model key is used. The corpus similarity score is exploratory and is not a trained language model or a grade.
+Before using it, run [`supabase-semantic-cartographer.sql`](supabase-semantic-cartographer.sql) in the Supabase SQL Editor. Run [`supabase-semantic-cartographer-normalization.sql`](supabase-semantic-cartographer-normalization.sql) before deploying the word-alias controls; it creates a separate glossary table protected by the authenticated teacher role. The model groups common plural forms, preserves observed spellings, accepts teacher-defined single-word aliases, and skips exact repeated passages and identical normalized uploads. PDF extraction and the experimental word-context model run in the browser; no Gemini API or external model key is used. The corpus similarity score is exploratory and is not a trained language model or a grade.
 
 Supabase tables and Row Level Security policies must exist before synchronization can succeed. The browser uses only `SUPABASE_URL` and `SUPABASE_ANON_KEY`; never expose `SUPABASE_SERVICE_ROLE_KEY` in frontend code.
 

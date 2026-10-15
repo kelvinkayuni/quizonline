@@ -234,6 +234,15 @@ tr:last-child td { border: 0; }
 .cartographer-score strong { font-size: 32px; }
 .cartographer-score p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .cartographer-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border: 1px solid #e8b6a9; border-radius: 7px; color: #9f4534; background: #fff3ef; font-size: 12px; }
+.cartographer-glossary-panel { display: grid; gap: 13px; }
+#cartographer-glossary-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: 12px; }
+#cartographer-glossary-form > button { min-height: 40px; white-space: nowrap; }
+.cartographer-glossary-list { display: grid; max-height: 220px; overflow: auto; }
+.cartographer-glossary-row { display: flex; min-height: 42px; align-items: center; justify-content: space-between; gap: 14px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.cartographer-glossary-row:last-child { border-bottom: 0; }
+.cartographer-glossary-row > span { min-width: 0; overflow-wrap: anywhere; }
+.cartographer-glossary-row > span > span { color: var(--muted); }
+.cartographer-observed-forms { flex: 1 0 100%; color: var(--muted); font-size: 11px; }
 @media (max-width: 1050px) { .cartographer-compare { grid-template-columns: 1fr 1.5fr; } .cartographer-score { grid-column: 1 / -1; } }
 @media (max-width: 760px) { .cartographer-ingest-grid, .cartographer-compare { grid-template-columns: 1fr; } .cartographer-score { grid-column: auto; } }
-@media (max-width: 620px) { .cartographer-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .cartographer-stats > div:nth-child(2) { border-right: 0; } .cartographer-stats > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); } #cartographer-compare-form { grid-template-columns: 1fr; } #cartographer-compare-form > button { grid-column: auto; } .cartographer-map { min-height: 220px; } .cartographer-error { align-items: flex-start; flex-direction: column; } }
+@media (max-width: 620px) { .cartographer-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .cartographer-stats > div:nth-child(2) { border-right: 0; } .cartographer-stats > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); } #cartographer-compare-form { grid-template-columns: 1fr; } #cartographer-compare-form > button { grid-column: auto; } #cartographer-glossary-form { grid-template-columns: 1fr; } .cartographer-map { min-height: 220px; } .cartographer-error { align-items: flex-start; flex-direction: column; } }

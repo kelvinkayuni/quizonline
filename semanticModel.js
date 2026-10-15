@@ -1,24 +1,68 @@
+import pluralize from 'pluralize';
+
 const STOPWORDS = new Set('a an and are as at be been but by for from had has have he her hers him his i if in into is it its of on or our she that the their them then there these they this those to was we were what when where which who will with would you your'.split(' '));
 
-export function tokenizeSemanticText(text) {
-  return (String(text || '').toLowerCase().match(/[\p{L}][\p{L}\p{M}'-]*/gu) || [])
-    .map(word => word.replace(/^[-']+|[-']+$/g, ''))
-    .filter(word => word.length > 2 && !STOPWORDS.has(word));
+function normalizedSurfaceForm(word) {
+  return word.normalize('NFKC')
+    .replace(/[\u2018\u2019\u02bc]/g, "'")
+    .replace(/[\u2010-\u2015\u2212]/g, '-');
 }
 
-export function trainSemanticModel(documents) {
+function createGlossaryMap(glossary) {
+  if (glossary instanceof Map) return glossary;
+  return new Map((glossary || []).map(entry => [
+    pluralize.singular(normalizedSurfaceForm(entry.alias).toLowerCase()),
+    pluralize.singular(normalizedSurfaceForm(entry.canonical_term).toLowerCase())
+  ]));
+}
+
+function canonicalTerm(word, glossary) {
+  const singular = pluralize.singular(normalizedSurfaceForm(word).toLowerCase());
+  return glossary.get(singular) || singular;
+}
+
+function tokenizeWithSurfaceForms(text, glossary) {
+  return (String(text || '').normalize('NFKC').match(/[\p{L}][\p{L}\p{M}'’ʼ\-‐‑‒–—−]*/gu) || [])
+    .map(raw => {
+      const surface = normalizedSurfaceForm(raw).replace(/^[-']+|[-']+$/g, '');
+      return { term: canonicalTerm(surface, glossary), surface };
+    })
+    .filter(token => token.term.length > 2 && !STOPWORDS.has(token.term));
+}
+
+export function tokenizeSemanticText(text, glossary = []) {
+  const glossaryMap = createGlossaryMap(glossary);
+  return tokenizeWithSurfaceForms(text, glossaryMap).map(token => token.term);
+}
+
+export function trainSemanticModel(documents, glossary = []) {
+  const glossaryMap = createGlossaryMap(glossary);
   const frequencies = new Map();
+  const surfaceForms = new Map();
   const cooccurrence = new Map();
+  const seenPassages = new Set();
   let passageCount = 0;
+  let duplicatePassages = 0;
   let totalPairs = 0;
 
   for (const document of documents || []) {
-    const passages = String(document.text_content || '').split(/(?:[.!?;\n]+|\s+[-*]\s+)/).map(tokenizeSemanticText).filter(words => words.length);
-    passageCount += passages.length;
-    for (const words of passages) {
+    const passages = String(document.text_content || '').normalize('NFKC').split(/(?:[.!?;\n]+|\s+[-*]\s+)/).map(text => tokenizeWithSurfaceForms(text, glossaryMap)).filter(tokens => tokens.length);
+    for (const tokens of passages) {
+      const words = tokens.map(token => token.term);
+      const passageKey = words.join(' ');
+      if (seenPassages.has(passageKey)) {
+        duplicatePassages++;
+        continue;
+      }
+      seenPassages.add(passageKey);
+      passageCount++;
       for (let index = 0; index < words.length; index++) {
         const word = words[index];
         frequencies.set(word, (frequencies.get(word) || 0) + 1);
+        if (!surfaceForms.has(word)) surfaceForms.set(word, new Map());
+        const forms = surfaceForms.get(word);
+        const surface = tokens[index].surface;
+        forms.set(surface, (forms.get(surface) || 0) + 1);
         for (let offset = 1; offset <= 5 && index + offset < words.length; offset++) {
           const neighbor = words[index + offset];
           if (word === neighbor) continue;
@@ -51,8 +95,13 @@ export function trainSemanticModel(documents) {
     if (vector.size) vectors.set(word, vector);
   }
 
-  const terms = [...frequencies].map(([word, count]) => ({ word, count, vector: vectors.get(word) || new Map() })).filter(term => term.vector.size).sort((a, b) => b.count - a.count || a.word.localeCompare(b.word));
-  return { terms, vectors, frequencies, stats: { terms: frequencies.size, passages: passageCount, documents: documents?.length || 0 } };
+  const terms = [...frequencies].map(([word, count]) => ({
+    word,
+    count,
+    forms: [...(surfaceForms.get(word) || [])].map(([surface, formCount]) => ({ surface, count: formCount })).sort((a, b) => b.count - a.count || a.surface.localeCompare(b.surface)),
+    vector: vectors.get(word) || new Map()
+  })).filter(term => term.vector.size).sort((a, b) => b.count - a.count || a.word.localeCompare(b.word));
+  return { terms, vectors, frequencies, glossary: glossaryMap, stats: { terms: frequencies.size, passages: passageCount, duplicatePassages, documents: documents?.length || 0 } };
 }
 
 function addCooccurrence(matrix, word, context, weight) {
@@ -62,7 +111,7 @@ function addCooccurrence(matrix, word, context, weight) {
 }
 
 function vectorForText(model, text) {
-  const tokens = tokenizeSemanticText(text);
+  const tokens = tokenizeSemanticText(text, model?.glossary);
   const vector = new Map();
   const known = new Set();
   for (const token of tokens) {
@@ -152,4 +201,13 @@ export function createSemanticMap(model, limit = 60) {
     nodes: mappedNodes,
     edges: edges.map(edge => ({ x1: mappedNodes[edge.left].x, y1: mappedNodes[edge.left].y, x2: mappedNodes[edge.right].x, y2: mappedNodes[edge.right].y, similarity: edge.similarity }))
   };
+}
+
+export function normalizeCorpusText(text) {
+  return String(text || '').normalize('NFKC')
+    .replace(/[\u2018\u2019\u02bc]/g, "'")
+    .replace(/[\u2010-\u2015\u2212]/g, '-')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
 }

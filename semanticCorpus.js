@@ -1,6 +1,7 @@
 import { supabase } from './supabase.js';
 
 const TABLE = 'semantic_cartographer_documents';
+const GLOSSARY_TABLE = 'semantic_cartographer_glossary';
 const MAX_FILE_BYTES = 12 * 1024 * 1024;
 
 export async function extractCartographerFile(file) {
@@ -36,5 +37,22 @@ export async function insertCartographerDocument(document) {
 
 export async function removeCartographerDocument(id) {
   const { error } = await supabase.from(TABLE).delete().eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+export async function listCartographerGlossary() {
+  const { data, error } = await supabase.from(GLOSSARY_TABLE).select('id, alias, canonical_term, created_at').order('alias');
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+export async function insertCartographerGlossaryEntry(entry) {
+  const { data, error } = await supabase.from(GLOSSARY_TABLE).insert(entry).select('id, alias, canonical_term, created_at').single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function removeCartographerGlossaryEntry(id) {
+  const { error } = await supabase.from(GLOSSARY_TABLE).delete().eq('id', id);
   if (error) throw new Error(error.message);
 }
