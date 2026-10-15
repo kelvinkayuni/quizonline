@@ -1,6 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { compareSemanticText, createSemanticMap, normalizeCorpusText, trainSemanticModel } from '../semanticModel.js';
+import { compareSemanticText, createSemanticMap, normalizeCorpusText, tokenizeSemanticText, trainSemanticModel } from '../semanticModel.js';
+
+test('semantic tokenization keeps negation and selected short terms but drops stopwords', () => {
+  assert.deepEqual(
+    tokenizeSemanticText('AI and no gemstones, not safe, never durable, without water.'),
+    ['ai', 'no', 'gemstone', 'not', 'safe', 'never', 'durable', 'without', 'water']
+  );
+});
+
+test('negation reverses the next term in a semantic comparison', () => {
+  const model = trainSemanticModel([{ text_content: 'Safe material protects people. Safe mineral limits damage. Safe treatment prevents injury.' }]);
+  const positive = compareSemanticText(model, 'safe', 'safe');
+  const negated = compareSemanticText(model, 'safe', 'not safe');
+  const sentenceBoundary = compareSemanticText(model, 'safe', 'not. safe');
+  assert.equal(positive.score, 100);
+  assert.equal(negated.score, 0);
+  assert.equal(sentenceBoundary.score, 100);
+  assert.equal(negated.knownB, 2);
+});
 
 test('corpus context gives related terms closer vectors than unrelated terms', () => {
   const model = trainSemanticModel([{ text_content: 'Diamond is hard. Sapphire is hard. Diamond resists scratching. Sapphire resists abrasion. River water flows. River water floods.' }]);

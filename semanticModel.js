@@ -1,6 +1,8 @@
 import pluralize from 'pluralize';
 
 const STOPWORDS = new Set('a an and are as at be been but by for from had has have he her hers him his i if in into is it its of on or our she that the their them then there these they this those to was we were what when where which who will with would you your'.split(' '));
+const NEGATION_TERMS = new Set(['no', 'not', 'never', 'without']);
+const SHORT_TERM_ALLOWLIST = new Set(['ai']);
 
 function normalizedSurfaceForm(word) {
   return word.normalize('NFKC')
@@ -27,7 +29,12 @@ function tokenizeWithSurfaceForms(text, glossary) {
       const surface = normalizedSurfaceForm(raw).replace(/^[-']+|[-']+$/g, '');
       return { term: canonicalTerm(surface, glossary), surface };
     })
-    .filter(token => token.term.length > 2 && !STOPWORDS.has(token.term));
+    .filter(token => {
+      const isNegation = NEGATION_TERMS.has(token.term);
+      const isAllowedShortTerm = SHORT_TERM_ALLOWLIST.has(token.term);
+      return (token.term.length > 2 || isNegation || isAllowedShortTerm)
+        && (!STOPWORDS.has(token.term) || isNegation || isAllowedShortTerm);
+    });
 }
 
 export function tokenizeSemanticText(text, glossary = []) {
@@ -111,14 +118,29 @@ function addCooccurrence(matrix, word, context, weight) {
 }
 
 function vectorForText(model, text) {
-  const tokens = tokenizeSemanticText(text, model?.glossary);
+  const passages = String(text || '').split(/(?:[.!?;\n]+|\s+[-*]\s+)/)
+    .map(passage => tokenizeSemanticText(passage, model?.glossary));
+  const tokens = passages.flat();
   const vector = new Map();
   const known = new Set();
-  for (const token of tokens) {
-    const source = model?.vectors.get(token);
-    if (!source) continue;
-    known.add(token);
-    for (const [context, value] of source) vector.set(context, (vector.get(context) || 0) + value / Math.max(1, tokens.length));
+  for (const passage of passages) {
+    let negateNextToken = false;
+    for (const token of passage) {
+      if (NEGATION_TERMS.has(token)) {
+        known.add(token);
+        negateNextToken = true;
+        continue;
+      }
+      const source = model?.vectors.get(token);
+      if (source) {
+        known.add(token);
+        const polarity = negateNextToken ? -1 : 1;
+        for (const [context, value] of source) {
+          vector.set(context, (vector.get(context) || 0) + polarity * value / Math.max(1, tokens.length));
+        }
+      }
+      negateNextToken = false;
+    }
   }
   return { vector, known: known.size, total: new Set(tokens).size };
 }
