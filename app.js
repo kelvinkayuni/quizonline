@@ -1,7 +1,7 @@
 function courseDisplayValue(value) { const normalized = String(value || '').trim(); return normalized === '34' || normalized.toLowerCase() === 'course' ? '' : normalized; }
 function studentCourseDetails() { const courseName = courseDisplayValue(state.config.courseName); const courseCode = courseDisplayValue(state.config.courseCode); return courseName || courseCode ? `<div class="course-banner">${courseName ? `<strong>${esc(courseName)}</strong>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''; }
 import { supabase } from './supabase.js';
-import { extractCartographerFile, insertCartographerDocument, insertCartographerGlossaryEntry, listCartographerDocuments, listCartographerGlossary, removeCartographerDocument, removeCartographerGlossaryEntry } from './semanticCorpus.js';
+import { extractCartographerFile, insertCartographerDocument, insertCartographerGlossaryEntry, listCartographerCoordinates, listCartographerDocuments, listCartographerGlossary, removeCartographerDocument, removeCartographerGlossaryEntry, saveCartographerCoordinates } from './semanticCorpus.js';
 import { compareSemanticText, createSemanticMap, normalizeCorpusText, tokenizeSemanticText, trainSemanticModel } from './semanticModel.js';
 import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, deleteTeacherQuizQuestionHistory, hydrateQuizState, listTeacherQuizQuestionHistory, loadStudentQuizReport, loadStudentQuizResult, loadTeacherQuizQuestionHistory, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizConfiguration, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAccessChange, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt, waitForPendingQuestionSaves } from './supabaseStore.js';
 import { loadStudentPresence, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
@@ -213,6 +213,8 @@ if (!state.importedFile) { state.users = []; saveState(); }
 let teacherView = 'overview';
 let cartographerDocuments = [];
 let cartographerGlossary = [];
+let cartographerCoordinates = [];
+let cartographerSignature = '';
 let cartographerModel = null;
 let cartographerResult = null;
 let cartographerSelectedWord = '';
@@ -557,7 +559,7 @@ function viewDescription(view) { return ({ overview: 'A live view of your assess
 function viewContent(view) { const content = ({ overview: overviewView, questions: questionsView, config: configView, users: usersView, results: resultsView, cartographer: cartographerView }[view])(); return view === 'results' ? `${content}${resultFileSelectionPanel()}` : content; }
 function cartographerView() {
   const model = cartographerModel;
-  const map = model ? createSemanticMap(model) : { nodes: [], edges: [] };
+  const map = model ? createSemanticMap(model, 60, cartographerCoordinates, cartographerSignature) : { nodes: [], edges: [] };
   const palette = ['#176b63', '#e2694f', '#277da1', '#bc7b19', '#39845a', '#8c5b47'];
   const graph = map.nodes.length ? `<svg class="cartographer-map" viewBox="0 0 900 560" role="img" aria-label="Semantic word map">${map.edges.map(edge => `<line x1="${edge.x1}" y1="${edge.y1}" x2="${edge.x2}" y2="${edge.y2}" stroke="#91a6a0" stroke-opacity="${Math.min(.55, edge.similarity * .62)}" stroke-width="${Math.max(.7, edge.similarity * 2.2)}" />`).join('')}${map.nodes.map((node, index) => `<g class="cartographer-node ${cartographerSelectedWord === node.word ? 'selected' : ''}" data-cartographer-word="${esc(node.word)}" tabindex="0" role="button" aria-label="Inspect ${esc(node.word)}"><circle cx="${node.x}" cy="${node.y}" r="${Math.min(12, 5 + Math.log2(node.count + 1) * 1.4)}" fill="${palette[index % palette.length]}" /><text x="${node.x}" y="${node.y - 13}" text-anchor="middle">${esc(node.word)}</text></g>`).join('')}</svg>` : `<div class="cartographer-empty">${cartographerLoading ? 'Loading the teacher corpus…' : 'Add course material to build the first map.'}</div>`;
   const selected = map.nodes.find(node => node.word === cartographerSelectedWord);
@@ -571,8 +573,8 @@ async function loadCartographerCorpus() {
   cartographerLoadError = '';
   app();
   try {
-    [cartographerDocuments, cartographerGlossary] = await Promise.all([listCartographerDocuments(), listCartographerGlossary()]);
-    cartographerModel = trainSemanticModel(cartographerDocuments, cartographerGlossary);
+    [cartographerDocuments, cartographerGlossary, cartographerCoordinates] = await Promise.all([listCartographerDocuments(), listCartographerGlossary(), listCartographerCoordinates()]);
+    await rebuildCartographerModel(true);
     cartographerLoaded = true;
   } catch (error) {
     cartographerLoadError = error.message || 'Could not load the Cartographer corpus.';
@@ -580,6 +582,22 @@ async function loadCartographerCorpus() {
     cartographerLoading = false;
     app();
   }
+}
+function currentCartographerSignature() {
+  const parts = [
+    ...cartographerDocuments.map(document => `${document.id}:${document.created_at}`).sort(),
+    ...cartographerGlossary.map(entry => `${entry.id}:${entry.alias}:${entry.canonical_term}`).sort()
+  ];
+  let hash = 2166136261;
+  for (const character of parts.join('|')) hash = Math.imul(hash ^ character.codePointAt(0), 16777619);
+  return `cartographer-v1-${(hash >>> 0).toString(16)}`;
+}
+async function rebuildCartographerModel(persistCoordinates = false) {
+  cartographerModel = trainSemanticModel(cartographerDocuments, cartographerGlossary);
+  cartographerSignature = currentCartographerSignature();
+  const map = createSemanticMap(cartographerModel, 60, cartographerCoordinates, cartographerSignature);
+  cartographerCoordinates = map.nodes.map(node => ({ term: node.word, x: node.coordinateX, y: node.coordinateY, model_signature: cartographerSignature }));
+  if (persistCoordinates) await saveCartographerCoordinates(cartographerCoordinates);
 }
 async function saveCartographerDocument(name, sourceType, text) {
   const normalizedText = String(text || '').trim();
@@ -590,7 +608,7 @@ async function saveCartographerDocument(name, sourceType, text) {
   if (duplicate) throw new Error(`This text is already in the corpus as "${duplicate.name}".`);
   const document = await insertCartographerDocument({ name: String(name || 'Untitled document').trim().slice(0, 120), source_type: sourceType, text_content: normalizedText, word_count: normalizedText.match(/[\p{L}\p{N}]+/gu)?.length || 0 });
   cartographerDocuments.unshift(document);
-  cartographerModel = trainSemanticModel(cartographerDocuments, cartographerGlossary);
+  await rebuildCartographerModel(true);
   cartographerResult = null;
   cartographerLoaded = true;
 }
@@ -598,7 +616,7 @@ async function deleteCartographerDocument(id) {
   try {
     await removeCartographerDocument(id);
     cartographerDocuments = cartographerDocuments.filter(document => document.id !== id);
-    cartographerModel = trainSemanticModel(cartographerDocuments, cartographerGlossary);
+    await rebuildCartographerModel(true);
     cartographerResult = null;
     cartographerSelectedWord = '';
     app();
@@ -615,12 +633,59 @@ function injectCartographerGlossary() {
   ingestGrid.insertAdjacentHTML('afterend', `<section class="card panel cartographer-glossary-panel"><div class="panel-head"><div><h2>Word aliases</h2><p class="subtle">Map spelling variants to one canonical word.</p></div></div><form id="cartographer-glossary-form"><div class="field"><label for="cartographer-alias">Variant</label><input id="cartographer-alias" name="alias" maxlength="80" placeholder="e.g. jewellery" required /></div><div class="field"><label for="cartographer-canonical">Canonical word</label><input id="cartographer-canonical" name="canonical_term" maxlength="80" placeholder="e.g. jewelry" required /></div><button class="btn btn-secondary" type="submit" ${cartographerLoading ? 'disabled' : ''}>Add alias</button></form><p class="cartographer-note">${cartographerModel?.stats.duplicatePassages || 0} exact repeated passages ignored. Regular plurals are grouped automatically; aliases apply across the saved corpus.</p><div class="cartographer-glossary-list">${entries}</div></section>`);
   const selected = cartographerModel?.terms.find(term => term.word === cartographerSelectedWord);
   const selection = document.querySelector('.cartographer-selection');
+  const selectedCoordinates = cartographerCoordinates.find(coordinate => coordinate.term === cartographerSelectedWord);
+  if (selectedCoordinates && selection) {
+    const readout = document.createElement('span');
+    readout.className = 'cartographer-coordinate-readout';
+    readout.textContent = `Coordinates: X ${selectedCoordinates.x >= 0 ? '+' : ''}${selectedCoordinates.x.toFixed(3)} · Y ${selectedCoordinates.y >= 0 ? '+' : ''}${selectedCoordinates.y.toFixed(3)}`;
+    selection.append(readout);
+  }
   if (selected && selection && selected.forms.length > 1) {
     const aliases = document.createElement('span');
     aliases.className = 'cartographer-observed-forms';
     aliases.textContent = `Observed forms: ${selected.forms.map(form => `${form.surface} (${form.count})`).join(', ')}`;
     selection.append(aliases);
   }
+}
+function injectCartographerCoordinatePlane() {
+  const svg = document.querySelector('.cartographer-map');
+  if (!svg || svg.querySelector('.cartographer-plane-layer')) return;
+  const namespace = 'http://www.w3.org/2000/svg';
+  const layer = document.createElementNS(namespace, 'g');
+  layer.classList.add('cartographer-plane-layer');
+  const ticks = [-1, -.5, 0, .5, 1];
+  const plotX = value => 90 + (value + 1) * 380;
+  const plotY = value => 50 + (1 - value) * 230;
+  const addLine = (x1, y1, x2, y2, className) => {
+    const line = document.createElementNS(namespace, 'line');
+    line.setAttribute('x1', x1);
+    line.setAttribute('y1', y1);
+    line.setAttribute('x2', x2);
+    line.setAttribute('y2', y2);
+    line.classList.add(className);
+    layer.append(line);
+  };
+  const addLabel = (text, x, y, className, anchor = 'middle') => {
+    const label = document.createElementNS(namespace, 'text');
+    label.textContent = text;
+    label.setAttribute('x', x);
+    label.setAttribute('y', y);
+    label.setAttribute('text-anchor', anchor);
+    label.classList.add(className);
+    layer.append(label);
+  };
+
+  for (const tick of ticks) {
+    const x = plotX(tick);
+    const y = plotY(tick);
+    addLine(x, 50, x, 510, tick === 0 ? 'cartographer-axisline' : 'cartographer-gridline');
+    addLine(90, y, 850, y, tick === 0 ? 'cartographer-axisline' : 'cartographer-gridline');
+    addLabel(String(tick), x, 535, 'cartographer-tick-label');
+    addLabel(String(tick), 78, y + 4, 'cartographer-tick-label', 'end');
+  }
+  addLabel('X', 870, 284, 'cartographer-axis-label');
+  addLabel('Y', plotX(0), 36, 'cartographer-axis-label');
+  svg.prepend(layer);
 }
 async function saveCartographerGlossaryEntry(alias, canonicalTerm) {
   const aliasTerm = String(alias || '').normalize('NFKC').trim().toLowerCase();
@@ -635,7 +700,7 @@ async function saveCartographerGlossaryEntry(alias, canonicalTerm) {
   if (cartographerGlossary.some(entry => tokenizeSemanticText(entry.canonical_term)[0] === aliasCanonical || tokenizeSemanticText(entry.alias)[0] === targetCanonical)) throw new Error('Aliases must point directly to a canonical word, not another alias.');
   const entry = await insertCartographerGlossaryEntry({ alias: aliasTerm, canonical_term: canonicalWord });
   cartographerGlossary.push(entry);
-  cartographerModel = trainSemanticModel(cartographerDocuments, cartographerGlossary);
+  await rebuildCartographerModel(true);
   cartographerSelectedWord = '';
   cartographerResult = null;
 }
@@ -643,7 +708,7 @@ async function deleteCartographerGlossaryEntry(id) {
   try {
     await removeCartographerGlossaryEntry(id);
     cartographerGlossary = cartographerGlossary.filter(entry => entry.id !== id);
-    cartographerModel = trainSemanticModel(cartographerDocuments, cartographerGlossary);
+    await rebuildCartographerModel(true);
     cartographerResult = null;
     app();
   } catch (error) {
@@ -1525,6 +1590,7 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
   const next = document.querySelector('[data-action="next-question"]'); if (next) next.addEventListener('click', nextQuestion);
   if (session?.role === 'teacher' && teacherView === 'cartographer') {
     injectCartographerGlossary();
+    injectCartographerCoordinatePlane();
     if (!cartographerLoaded && !cartographerLoading && !cartographerLoadError) void loadCartographerCorpus();
     const reload = document.querySelectorAll('[data-action="cartographer-reload"]');
     reload.forEach(button => button.addEventListener('click', () => { cartographerLoaded = false; cartographerLoadError = ''; void loadCartographerCorpus(); }));
@@ -1583,7 +1649,16 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
       }
     });
     document.querySelectorAll('[data-action="cartographer-glossary-delete"]').forEach(button => button.addEventListener('click', () => { void deleteCartographerGlossaryEntry(button.dataset.id); }));
-    document.querySelector('[data-action="cartographer-train"]')?.addEventListener('click', () => { cartographerModel = trainSemanticModel(cartographerDocuments, cartographerGlossary); cartographerSelectedWord = ''; cartographerResult = null; app(); });
+    document.querySelector('[data-action="cartographer-train"]')?.addEventListener('click', async () => {
+      try {
+        await rebuildCartographerModel(true);
+        cartographerSelectedWord = '';
+        cartographerResult = null;
+        app();
+      } catch (error) {
+        showToast(`Map coordinates could not be saved: ${error.message || error}`, 'error');
+      }
+    });
     document.querySelectorAll('[data-action="cartographer-delete"]').forEach(button => button.addEventListener('click', () => { void deleteCartographerDocument(button.dataset.id); }));
     document.querySelectorAll('[data-cartographer-word]').forEach(node => {
       const selectWord = () => { cartographerSelectedWord = node.dataset.cartographerWord; app(); };

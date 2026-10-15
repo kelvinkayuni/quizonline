@@ -2,6 +2,7 @@ import { supabase } from './supabase.js';
 
 const TABLE = 'semantic_cartographer_documents';
 const GLOSSARY_TABLE = 'semantic_cartographer_glossary';
+const COORDINATES_TABLE = 'semantic_cartographer_coordinates';
 const MAX_FILE_BYTES = 12 * 1024 * 1024;
 
 export async function extractCartographerFile(file) {
@@ -54,5 +55,18 @@ export async function insertCartographerGlossaryEntry(entry) {
 
 export async function removeCartographerGlossaryEntry(id) {
   const { error } = await supabase.from(GLOSSARY_TABLE).delete().eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+export async function listCartographerCoordinates() {
+  const { data, error } = await supabase.from(COORDINATES_TABLE).select('term, x, y, model_signature');
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+export async function saveCartographerCoordinates(coordinates) {
+  if (!coordinates.length) return;
+  const rows = coordinates.map(coordinate => ({ ...coordinate, updated_at: new Date().toISOString() }));
+  const { error } = await supabase.from(COORDINATES_TABLE).upsert(rows, { onConflict: 'owner_id,term' });
   if (error) throw new Error(error.message);
 }

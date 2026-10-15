@@ -16,7 +16,18 @@ test('map output has bounded coordinates and links contextual terms', () => {
   const map = createSemanticMap(model);
   assert.ok(map.nodes.length > 0);
   assert.ok(map.edges.length > 0);
-  assert.ok(map.nodes.every(node => node.x >= 42 && node.x <= 858 && node.y >= 40 && node.y <= 520));
+  assert.ok(map.nodes.every(node => node.coordinateX >= -1 && node.coordinateX <= 1 && node.coordinateY >= -1 && node.coordinateY <= 1));
+  assert.ok(map.nodes.every(node => node.x >= 90 && node.x <= 850 && node.y >= 50 && node.y <= 510));
+});
+
+test('saved coordinates stay fixed for the same corpus and drift gradually for a new revision', () => {
+  const model = trainSemanticModel([{ text_content: 'Quartz is a mineral. Feldspar is a mineral. Quartz crystals are hard.' }]);
+  const firstMap = createSemanticMap(model, 60, [], 'revision-1');
+  const saved = firstMap.nodes.map(node => ({ term: node.word, x: node.coordinateX, y: node.coordinateY, model_signature: 'revision-1' }));
+  const sameRevision = createSemanticMap(model, 60, saved, 'revision-1');
+  assert.deepEqual(sameRevision.nodes.map(node => [node.coordinateX, node.coordinateY]), firstMap.nodes.map(node => [node.coordinateX, node.coordinateY]));
+  const nextRevision = createSemanticMap(model, 60, saved, 'revision-2');
+  assert.ok(nextRevision.nodes.every((node, index) => Math.abs(node.coordinateX - saved[index].x) <= .3 && Math.abs(node.coordinateY - saved[index].y) <= .3));
 });
 
 test('unseen terms are excluded and report corpus coverage', () => {

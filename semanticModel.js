@@ -147,59 +147,85 @@ export function compareSemanticText(model, textA, textB) {
   };
 }
 
-export function createSemanticMap(model, limit = 60) {
-  const nodes = (model?.terms || []).slice(0, limit).map((term, index) => {
-    const seed = [...term.word].reduce((sum, char) => (sum * 31 + char.charCodeAt(0)) >>> 0, index + 1);
-    const angle = (seed % 10000) / 10000 * Math.PI * 2;
-    const radius = .18 + ((seed >>> 8) % 1000) / 1600;
-    return { ...term, rawX: Math.cos(angle) * radius, rawY: Math.sin(angle) * radius };
+function stableProjectionCoefficient(word, axis) {
+  let hash = axis === 'x' ? 2166136261 : 2246822519;
+  for (const character of word) hash = Math.imul(hash ^ character.codePointAt(0), 16777619);
+  return ((hash >>> 0) / 2147483647.5) - 1;
+}
+
+function projectWordVector(vector) {
+  let projectedX = 0;
+  let projectedY = 0;
+  let magnitude = 0;
+  for (const [context, weight] of vector) {
+    projectedX += weight * stableProjectionCoefficient(context, 'x');
+    projectedY += weight * stableProjectionCoefficient(context, 'y');
+    magnitude += weight * weight;
+  }
+  const scale = Math.sqrt(magnitude) || 1;
+  return {
+    x: Math.tanh((projectedX / scale) * 1.8) * .94,
+    y: Math.tanh((projectedY / scale) * 1.8) * .94
+  };
+}
+
+function clampCoordinate(value) {
+  return Math.max(-1, Math.min(1, value));
+}
+
+export function createSemanticMap(model, limit = 60, savedCoordinates = [], modelSignature = '') {
+  const terms = (model?.terms || []).slice(0, limit);
+  const savedByTerm = new Map(savedCoordinates.map(coordinate => [coordinate.term, coordinate]));
+  const availableAnchors = terms.map(term => ({ term, saved: savedByTerm.get(term.word) })).filter(item => item.saved);
+  const nodes = terms.map(term => {
+    const target = projectWordVector(term.vector);
+    const saved = savedByTerm.get(term.word);
+    let coordinateX = target.x;
+    let coordinateY = target.y;
+
+    if (saved) {
+      if (saved.model_signature === modelSignature) {
+        coordinateX = Number(saved.x);
+        coordinateY = Number(saved.y);
+      } else {
+        coordinateX = Number(saved.x) * .85 + target.x * .15;
+        coordinateY = Number(saved.y) * .85 + target.y * .15;
+      }
+    } else if (availableAnchors.length) {
+      const neighbors = availableAnchors.map(anchor => ({
+        x: Number(anchor.saved.x),
+        y: Number(anchor.saved.y),
+        similarity: cosineSimilarity(term.vector, anchor.term.vector)
+      })).filter(anchor => anchor.similarity > .1).sort((left, right) => right.similarity - left.similarity).slice(0, 5);
+      const totalWeight = neighbors.reduce((sum, neighbor) => sum + neighbor.similarity ** 2, 0);
+      if (totalWeight) {
+        const anchorX = neighbors.reduce((sum, neighbor) => sum + neighbor.x * neighbor.similarity ** 2, 0) / totalWeight;
+        const anchorY = neighbors.reduce((sum, neighbor) => sum + neighbor.y * neighbor.similarity ** 2, 0) / totalWeight;
+        coordinateX = anchorX * .7 + target.x * .3;
+        coordinateY = anchorY * .7 + target.y * .3;
+      }
+    }
+
+    coordinateX = clampCoordinate(coordinateX);
+    coordinateY = clampCoordinate(coordinateY);
+    return {
+      ...term,
+      coordinateX,
+      coordinateY,
+      x: 90 + (coordinateX + 1) * 380,
+      y: 50 + (1 - coordinateY) * 230
+    };
   });
   const edges = [];
-  const similarities = new Map();
   for (let left = 0; left < nodes.length; left++) {
     for (let right = left + 1; right < nodes.length; right++) {
       const similarity = cosineSimilarity(nodes[left].vector, nodes[right].vector);
-      similarities.set(`${left}:${right}`, similarity);
       if (similarity >= .18) edges.push({ left, right, similarity });
     }
   }
-
-  const positions = nodes.map(node => ({ x: node.rawX, y: node.rawY }));
-  for (let iteration = 0; iteration < 110; iteration++) {
-    const movement = positions.map(() => ({ x: 0, y: 0 }));
-    for (let left = 0; left < positions.length; left++) {
-      for (let right = left + 1; right < positions.length; right++) {
-        let dx = positions[right].x - positions[left].x;
-        let dy = positions[right].y - positions[left].y;
-        const distance = Math.max(.001, Math.hypot(dx, dy));
-        const similarity = similarities.get(`${left}:${right}`) || 0;
-        const target = .09 + (1 - similarity) * .6;
-        const force = similarity > .1 ? (distance - target) * .012 : -Math.max(0, .22 - distance) * .018;
-        dx = (dx / distance) * force;
-        dy = (dy / distance) * force;
-        movement[left].x += dx;
-        movement[left].y += dy;
-        movement[right].x -= dx;
-        movement[right].y -= dy;
-      }
-    }
-    const cooling = 1 - iteration / 145;
-    for (let index = 0; index < positions.length; index++) {
-      positions[index].x += (movement[index].x - positions[index].x * .012) * cooling;
-      positions[index].y += (movement[index].y - positions[index].y * .012) * cooling;
-    }
-  }
-
-  const xs = positions.map(position => position.x);
-  const ys = positions.map(position => position.y);
-  const minX = Math.min(...xs, -.1);
-  const maxX = Math.max(...xs, .1);
-  const minY = Math.min(...ys, -.1);
-  const maxY = Math.max(...ys, .1);
-  const mappedNodes = nodes.map((node, index) => ({ ...node, x: 42 + ((positions[index].x - minX) / (maxX - minX || 1)) * 816, y: 40 + ((positions[index].y - minY) / (maxY - minY || 1)) * 480 }));
   return {
-    nodes: mappedNodes,
-    edges: edges.map(edge => ({ x1: mappedNodes[edge.left].x, y1: mappedNodes[edge.left].y, x2: mappedNodes[edge.right].x, y2: mappedNodes[edge.right].y, similarity: edge.similarity }))
+    nodes,
+    edges: edges.map(edge => ({ x1: nodes[edge.left].x, y1: nodes[edge.left].y, x2: nodes[edge.right].x, y2: nodes[edge.right].y, similarity: edge.similarity }))
   };
 }
 
