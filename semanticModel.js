@@ -10,16 +10,20 @@ function normalizedSurfaceForm(word) {
     .replace(/[\u2010-\u2015\u2212]/g, '-');
 }
 
+function normalizedSingularTerm(word) {
+  return pluralize.singular(normalizedSurfaceForm(word).toLowerCase().replace(/'s$/u, ''));
+}
+
 function createGlossaryMap(glossary) {
   if (glossary instanceof Map) return glossary;
   return new Map((glossary || []).map(entry => [
-    pluralize.singular(normalizedSurfaceForm(entry.alias).toLowerCase()),
-    pluralize.singular(normalizedSurfaceForm(entry.canonical_term).toLowerCase())
+    normalizedSingularTerm(entry.alias),
+    normalizedSingularTerm(entry.canonical_term)
   ]));
 }
 
 function canonicalTerm(word, glossary) {
-  const singular = pluralize.singular(normalizedSurfaceForm(word).toLowerCase());
+  const singular = normalizedSingularTerm(word);
   return glossary.get(singular) || singular;
 }
 

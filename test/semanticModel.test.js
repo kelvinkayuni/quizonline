@@ -9,6 +9,11 @@ test('semantic tokenization keeps negation and selected short terms but drops st
   );
 });
 
+test('possessives do not produce malformed apostrophe terms', () => {
+  assert.deepEqual(tokenizeSemanticText("it's"), []);
+  assert.deepEqual(tokenizeSemanticText("student's"), ['student']);
+});
+
 test('negation reverses the next term in a semantic comparison', () => {
   const model = trainSemanticModel([{ text_content: 'Safe material protects people. Safe mineral limits damage. Safe treatment prevents injury.' }]);
   const positive = compareSemanticText(model, 'safe', 'safe');

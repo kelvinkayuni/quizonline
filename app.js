@@ -581,11 +581,37 @@ function cartographerView() {
   const result = cartographerResult;
   return `<div class="cartographer-workspace"><section class="cartographer-stats"><div><span class="eyebrow">Corpus documents</span><strong>${cartographerDocuments.length}</strong></div><div><span class="eyebrow">Indexed terms</span><strong>${model?.stats.terms || 0}</strong></div><div><span class="eyebrow">Text passages</span><strong>${model?.stats.passages || 0}</strong></div><div><span class="eyebrow">Model</span><strong class="cartographer-status">${cartographerLoadError ? 'Needs setup' : cartographerLoading ? 'Loading' : model?.stats.terms ? 'Corpus ready' : 'No corpus'}</strong></div></section>${cartographerLoadError ? `<div class="cartographer-error" role="alert">${esc(cartographerLoadError)} <button class="btn btn-secondary btn-small" data-action="cartographer-reload">Retry</button></div>` : ''}<section class="cartographer-ingest-grid"><div class="card panel"><div class="panel-head"><div><h2>Train from material</h2><p class="subtle">PDF, text files, or pasted course notes</p></div></div><label class="cartographer-drop" for="cartographer-files"><span class="upload-icon">↑</span><strong>Select PDF or text files</strong><span class="subtle">Files are extracted in this browser.</span><input id="cartographer-files" type="file" accept=".pdf,.txt,text/plain,application/pdf" multiple /></label><form id="cartographer-text-form" class="cartographer-text-form"><div class="field"><label for="cartographer-document-name">Document title</label><input id="cartographer-document-name" name="name" maxlength="120" placeholder="e.g. Gemstone properties" required /></div><div class="field"><label for="cartographer-document-text">Paste course text</label><textarea id="cartographer-document-text" name="content" maxlength="300000" placeholder="Paste text from your course material" required></textarea></div><button class="btn btn-primary" type="submit" ${cartographerLoading ? 'disabled' : ''}>Add to corpus</button></form><p class="cartographer-note">Corpus associations are computed locally from the uploaded texts. This is an experimental word-context model, not a fine-tuned language model. Similarity scores are for teacher review only and are not connected to quiz marks.</p></div><div class="card panel"><div class="panel-head"><div><h2>Training corpus</h2><p class="subtle">${cartographerDocuments.length} source${cartographerDocuments.length === 1 ? '' : 's'} · stored in the teacher account</p></div><button class="btn btn-secondary btn-small" data-action="cartographer-reload" ${cartographerLoading ? 'disabled' : ''} title="Reload corpus">↻</button></div><div class="cartographer-document-list">${cartographerDocuments.length ? cartographerDocuments.map(document => `<div class="cartographer-document"><span class="cartographer-document-kind">${document.source_type === 'pdf' ? 'PDF' : 'TXT'}</span><span class="cartographer-document-name"><strong>${esc(document.name)}</strong><small>${document.word_count || 0} words · ${new Date(document.created_at).toLocaleDateString()}</small></span><button class="cartographer-delete" data-action="cartographer-delete" data-id="${esc(document.id)}" aria-label="Remove ${esc(document.name)}" title="Remove document">×</button></div>`).join('') : `<div class="empty">${cartographerLoading ? 'Loading saved documents…' : 'No documents have been added.'}</div>`}</div></div></section><section class="card panel cartographer-map-panel"><div class="panel-head"><div><h2>Semantic word space</h2><p class="subtle">${map.nodes.length} frequent terms · lines show contextual associations</p></div><div class="cartographer-map-toolbar" role="toolbar" aria-label="Map zoom controls"><button class="cartographer-zoom-button" type="button" data-action="cartographer-zoom-out" aria-label="Zoom out" title="Zoom out" ${zoom <= .5 ? 'disabled' : ''}>−</button><output class="cartographer-zoom-level" aria-live="polite">${Math.round(zoom * 100)}%</output><button class="cartographer-zoom-button" type="button" data-action="cartographer-zoom-in" aria-label="Zoom in" title="Zoom in" ${zoom >= 4 ? 'disabled' : ''}>+</button><button class="cartographer-zoom-button cartographer-zoom-reset" type="button" data-action="cartographer-zoom-reset" aria-label="Reset zoom" title="Reset zoom" ${zoom === 1 ? 'disabled' : ''}>↺</button><button class="btn btn-secondary btn-small" data-action="cartographer-train" ${!cartographerDocuments.length || cartographerLoading ? 'disabled' : ''}>Rebuild map</button></div></div>${graph}${selected ? `<div class="cartographer-selection"><strong>${esc(selected.word)}</strong><span>Appears ${selected.count} times. Closest corpus terms:</span>${neighbors.map(item => `<span class="badge">${esc(item.word)} · ${item.score}%</span>`).join('')}</div>` : ''}</section><section class="card panel cartographer-compare"><div><div class="eyebrow kicker">Corpus similarity lab</div><h2>Compare words or sentences</h2><p class="subtle">Scores reflect contextual patterns in the current corpus. Unknown terms are excluded from the comparison.</p></div><form id="cartographer-compare-form"><div class="field"><label for="cartographer-text-a">Text A</label><textarea id="cartographer-text-a" name="textA" maxlength="5000" required>${esc(result?.textA || '')}</textarea></div><div class="field"><label for="cartographer-text-b">Text B</label><textarea id="cartographer-text-b" name="textB" maxlength="5000" required>${esc(result?.textB || '')}</textarea></div><button class="btn btn-primary" type="submit" ${!model ? 'disabled' : ''}>Compare in corpus</button></form>${result ? `<div class="cartographer-score"><span class="eyebrow">Corpus similarity</span><strong>${result.score}%</strong><div class="progress"><span style="width:${result.score}%"></span></div><p>${result.knownA} known terms in A · ${result.knownB} known terms in B · ${result.coverage}% corpus coverage</p></div>` : ''}</section></div>`;
 }
+function captureCartographerRefreshState() {
+  return {
+    textA: document.querySelector('#cartographer-text-a')?.value,
+    textB: document.querySelector('#cartographer-text-b')?.value,
+    alias: document.querySelector('#cartographer-alias')?.value,
+    canonical: document.querySelector('#cartographer-canonical')?.value,
+    glossaryScrollTop: document.querySelector('.cartographer-glossary-list')?.scrollTop
+  };
+}
+function restoreCartographerRefreshState(refreshState) {
+  for (const [selector, value] of [
+    ['#cartographer-text-a', refreshState.textA],
+    ['#cartographer-text-b', refreshState.textB],
+    ['#cartographer-alias', refreshState.alias],
+    ['#cartographer-canonical', refreshState.canonical]
+  ]) {
+    const field = document.querySelector(selector);
+    if (field && value !== undefined) field.value = value;
+  }
+  const glossaryList = document.querySelector('.cartographer-glossary-list');
+  if (glossaryList && refreshState.glossaryScrollTop !== undefined) {
+    glossaryList.scrollTop = refreshState.glossaryScrollTop;
+  }
+}
 async function loadCartographerCorpus() {
   if (cartographerLoading) return;
+  const refreshState = captureCartographerRefreshState();
   cartographerLoading = true;
   cartographerLoadError = '';
   app();
+  restoreCartographerRefreshState(refreshState);
   try {
     [cartographerDocuments, cartographerGlossary, cartographerCoordinates] = await Promise.all([listCartographerDocuments(), listCartographerGlossary(), listCartographerCoordinates()]);
     await rebuildCartographerModel(true);
@@ -595,6 +621,7 @@ async function loadCartographerCorpus() {
   } finally {
     cartographerLoading = false;
     app();
+    restoreCartographerRefreshState(refreshState);
   }
 }
 function currentCartographerSignature() {
