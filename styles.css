@@ -225,7 +225,8 @@ tr:last-child td { border: 0; }
 .cartographer-zoom-button { display: grid; width: 32px; height: 32px; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 5px; color: var(--ink); background: var(--panel); font-size: 18px; line-height: 1; }
 .cartographer-zoom-button:hover:not(:disabled) { border-color: var(--teal); color: var(--teal); background: var(--teal-soft); }
 .cartographer-zoom-level { min-width: 42px; color: var(--muted); font: 500 10px DM Mono, monospace; text-align: center; }
-.cartographer-map-scroll { max-height: min(68vh, 640px); min-height: 280px; overflow: auto; direction: rtl; scrollbar-gutter: stable; border: 1px solid #e2e8e1; border-radius: 7px; background: #fbfcf8; scrollbar-color: #93a69b #edf1ec; }
+.cartographer-map-scroll { min-height: 280px; overflow: auto; direction: rtl; scrollbar-gutter: stable; border: 1px solid #e2e8e1; border-radius: 7px; background: #fbfcf8; scrollbar-color: #93a69b #edf1ec; }
+.cartographer-map-scroll.zoomed { max-height: min(68vh, 640px); }
 .cartographer-map { display: block; width: 100%; min-width: 0; min-height: 280px; height: auto; max-width: none; overflow: visible; border: 0; border-radius: 0; background: transparent; direction: ltr; aspect-ratio: 900 / 560; }
 .cartographer-map text { fill: #273b38; font: 11px 'DM Mono', monospace; pointer-events: none; }
 .cartographer-map .cartographer-word-label { fill: #354640; font-size: 6px; opacity: .72; }

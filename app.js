@@ -451,6 +451,7 @@ function ensureStudentQuestionOrder() {
 }
 function app() {
   const studentDirectoryScrollTop = document.querySelector('.student-account-actions + .table-wrap')?.scrollTop;
+  const cartographerPageScrollTop = session?.role === 'teacher' && teacherView === 'cartographer' ? window.scrollY : undefined;
   const cartographerRefreshState = session?.role === 'teacher' && teacherView === 'cartographer' ? captureCartographerRefreshState() : null;
   const cartographerMapScroll = document.querySelector('.cartographer-map-scroll');
   const cartographerMapScrollPosition = cartographerMapScroll ? { top: cartographerMapScroll.scrollTop, left: cartographerMapScroll.scrollLeft } : null;
@@ -483,6 +484,7 @@ function app() {
   restoreTeacherDrafts();
   bindEvents();
   if (cartographerRefreshState) restoreCartographerRefreshState(cartographerRefreshState);
+  if (cartographerPageScrollTop !== undefined) window.scrollTo(0, cartographerPageScrollTop);
   updateSelectedStudentAccountControls();
 }
 function renderQuizFileSelectDropdown() {
@@ -701,6 +703,8 @@ function injectCartographerGlossary() {
   }
 }
 function injectCartographerCoordinatePlane() {
+  const mapScroll = document.querySelector('.cartographer-map-scroll');
+  if (mapScroll) mapScroll.classList.toggle('zoomed', cartographerZoom > 1);
   const svg = document.querySelector('.cartographer-map');
   if (!svg || svg.querySelector('.cartographer-plane-layer')) return;
   const namespace = 'http://www.w3.org/2000/svg';
