@@ -20,16 +20,23 @@ test('non-similar rules accept one word including stopwords and negated words', 
   assert.equal(normalizeSemanticWord('not a word pair'), '');
 });
 
-test('saved non-similar word pairs override cosine comparison in either order', () => {
-  const model = trainSemanticModel([{ text_content: 'Gemstones are studied. Gemstones are researched. Study describes gemstones. Research describes gemstones.' }]);
-  const result = compareSemanticText(
-    model,
-    "isn't the study of gemstones",
-    'is the study of gemstones',
-    [{ word_a: "isn't", word_b: 'is' }]
-  );
-  assert.equal(result.score, 0);
-  assert.equal(result.nonSimilarPairMatched, true);
+test('directional contraction rules normalize to base word plus not', () => {
+  const rules = [{ negative_form: "hasn't", base_word: 'has' }];
+  assert.deepEqual(tokenizeSemanticText("hasn't gemstones", [], rules), ['not', 'gemstone']);
+  assert.deepEqual(tokenizeSemanticText('has not gemstones', [], rules), ['not', 'gemstone']);
+  assert.equal(normalizeSemanticWord('does'), 'does');
+  assert.deepEqual(tokenizeSemanticText("doesn't damage", [], [{ negative_form: "doesn't", base_word: 'does' }]), ['does', 'not', 'damage']);
+});
+
+test('contractions and expanded negation compare through the same model path', () => {
+  const rules = [{ negative_form: "isn't", base_word: 'is' }];
+  const model = trainSemanticModel([{ text_content: 'Gemstones are studied. Gemstones are researched. Study describes gemstones. Research describes gemstones.' }], [], rules);
+  const contractedAndExpanded = compareSemanticText(model, "isn't the study of gemstones", 'is not the study of gemstones', rules);
+  const contractedAgainstPositive = compareSemanticText(model, "isn't the study of gemstones", 'is the study of gemstones', rules);
+  const expandedAgainstPositive = compareSemanticText(model, 'is not the study of gemstones', 'is the study of gemstones', rules);
+  assert.equal(contractedAndExpanded.score, 100);
+  assert.equal(contractedAgainstPositive.score, expandedAgainstPositive.score);
+  assert.equal(contractedAgainstPositive.nonSimilarPairMatched, false);
 });
 
 test('negation reverses the next term in a semantic comparison', () => {

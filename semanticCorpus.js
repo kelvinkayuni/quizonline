@@ -60,13 +60,13 @@ export async function removeCartographerGlossaryEntry(id) {
 }
 
 export async function listCartographerNonSimilarPairs() {
-  const { data, error } = await supabase.from(NON_SIMILAR_PAIRS_TABLE).select('word_a, word_b').order('word_a');
+  const { data, error } = await supabase.from(NON_SIMILAR_PAIRS_TABLE).select('word_a, word_b, negative_form, base_word').order('word_a');
   if (error) throw new Error(error.message);
   return data || [];
 }
 
 export async function insertCartographerNonSimilarPair(pair) {
-  const { data, error } = await supabase.from(NON_SIMILAR_PAIRS_TABLE).insert(pair).select('word_a, word_b').single();
+  const { data, error } = await supabase.from(NON_SIMILAR_PAIRS_TABLE).insert(pair).select('word_a, word_b, negative_form, base_word').single();
   if (error) {
     if (error.code === '23505') throw new Error('That non-similar word pair is already saved.');
     throw new Error(error.message);

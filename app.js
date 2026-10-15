@@ -590,8 +590,8 @@ function captureCartographerRefreshState() {
     textB: document.querySelector('#cartographer-text-b')?.value,
     alias: document.querySelector('#cartographer-alias')?.value,
     canonical: document.querySelector('#cartographer-canonical')?.value,
-    nonSimilarWordA: document.querySelector('#cartographer-non-similar-word-a')?.value,
-    nonSimilarWordB: document.querySelector('#cartographer-non-similar-word-b')?.value,
+    negativeForm: document.querySelector('#cartographer-negation-negative-form')?.value,
+    baseWord: document.querySelector('#cartographer-negation-base-word')?.value,
     glossaryScrollTop: document.querySelector('.cartographer-glossary-list')?.scrollTop
   };
 }
@@ -601,8 +601,8 @@ function restoreCartographerRefreshState(refreshState) {
     ['#cartographer-text-b', refreshState.textB],
     ['#cartographer-alias', refreshState.alias],
     ['#cartographer-canonical', refreshState.canonical],
-    ['#cartographer-non-similar-word-a', refreshState.nonSimilarWordA],
-    ['#cartographer-non-similar-word-b', refreshState.nonSimilarWordB]
+    ['#cartographer-negation-negative-form', refreshState.negativeForm],
+    ['#cartographer-negation-base-word', refreshState.baseWord]
   ]) {
     const field = document.querySelector(selector);
     if (field && value !== undefined) field.value = value;
@@ -631,14 +631,17 @@ async function loadCartographerCorpus() {
 function currentCartographerSignature() {
   const parts = [
     ...cartographerDocuments.map(document => `${document.id}:${document.created_at}`).sort(),
-    ...cartographerGlossary.map(entry => `${entry.id}:${entry.alias}:${entry.canonical_term}`).sort()
+    ...cartographerGlossary.map(entry => `${entry.id}:${entry.alias}:${entry.canonical_term}`).sort(),
+    ...cartographerNonSimilarPairs.map(pair => `${pair.negative_form || pair.word_a}:${pair.base_word || pair.word_b}`).sort()
   ];
   let hash = 2166136261;
   for (const character of parts.join('|')) hash = Math.imul(hash ^ character.codePointAt(0), 16777619);
   return `cartographer-v1-${(hash >>> 0).toString(16)}`;
 }
+function cartographerNegationRules() { return cartographerNonSimilarPairs.filter(pair => pair.negative_form && pair.base_word); }
+function cartographerLegacyNonSimilarPairs() { return cartographerNonSimilarPairs.filter(pair => !pair.negative_form || !pair.base_word); }
 async function rebuildCartographerModel(persistCoordinates = false) {
-  cartographerModel = trainSemanticModel(cartographerDocuments, cartographerGlossary);
+  cartographerModel = trainSemanticModel(cartographerDocuments, cartographerGlossary, cartographerNegationRules());
   cartographerSignature = currentCartographerSignature();
   const map = createSemanticMap(cartographerModel, 60, cartographerCoordinates, cartographerSignature);
   cartographerCoordinates = map.nodes.map(node => ({ term: node.word, x: node.coordinateX, y: node.coordinateY, model_signature: cartographerSignature }));
@@ -737,7 +740,7 @@ function injectCartographerCoordinatePlane() {
 function injectCartographerNonSimilarPairForm() {
   const glossaryPanel = document.querySelector('.cartographer-glossary-panel');
   if (!glossaryPanel || document.querySelector('.cartographer-non-similar-panel')) return;
-  glossaryPanel.insertAdjacentHTML('afterend', `<section class="card panel cartographer-non-similar-panel"><div class="panel-head"><div><h2>Non-similar word pairs</h2><p class="subtle">Save two words that should not match each other in comparisons.</p></div></div><form id="cartographer-non-similar-form"><div class="field"><label for="cartographer-non-similar-word-a">Word A</label><input id="cartographer-non-similar-word-a" name="wordA" maxlength="80" placeholder="e.g. isn't" required /></div><div class="field"><label for="cartographer-non-similar-word-b">Word B</label><input id="cartographer-non-similar-word-b" name="wordB" maxlength="80" placeholder="e.g. is" required /></div><button class="btn btn-secondary" type="submit" ${cartographerLoading ? 'disabled' : ''}>Save pair</button></form></section>`);
+  glossaryPanel.insertAdjacentHTML('afterend', `<section class="card panel cartographer-non-similar-panel"><div class="panel-head"><div><h2>Negation rules</h2><p class="subtle">Map a negated word to its positive base form.</p></div></div><form id="cartographer-negation-rule-form"><div class="field"><label for="cartographer-negation-negative-form">Negated form</label><input id="cartographer-negation-negative-form" name="negativeForm" maxlength="80" placeholder="e.g. isn't" required /></div><div class="field"><label for="cartographer-negation-base-word">Base word</label><input id="cartographer-negation-base-word" name="baseWord" maxlength="80" placeholder="e.g. is" required /></div><button class="btn btn-secondary" type="submit" ${cartographerLoading ? 'disabled' : ''}>Save rule</button></form></section>`);
 }
 function injectCartographerNonSimilarPairNotice() {
   if (!cartographerResult?.nonSimilarPairMatched) return;
@@ -765,18 +768,20 @@ async function saveCartographerGlossaryEntry(alias, canonicalTerm) {
   cartographerSelectedWord = '';
   cartographerResult = null;
 }
-async function saveCartographerNonSimilarPair(inputWordA, inputWordB) {
-  const wordA = normalizeSemanticWord(inputWordA, cartographerGlossary);
-  const wordB = normalizeSemanticWord(inputWordB, cartographerGlossary);
-  if (!wordA || !wordB) throw new Error('Enter one word in each field; phrases and sentences are not accepted.');
-  if (wordA === wordB) throw new Error('Choose two different words after normalization.');
-  const [storedWordA, storedWordB] = wordA < wordB ? [wordA, wordB] : [wordB, wordA];
-  if (cartographerNonSimilarPairs.some(pair => pair.word_a === storedWordA && pair.word_b === storedWordB)) {
-    throw new Error('That non-similar word pair is already saved.');
+async function saveCartographerNegationRule(inputNegativeForm, inputBaseWord) {
+  const negativeForm = normalizeSemanticWord(inputNegativeForm, cartographerGlossary);
+  const baseWord = normalizeSemanticWord(inputBaseWord, cartographerGlossary);
+  if (!negativeForm || !baseWord) throw new Error('Enter one word in each field; phrases and sentences are not accepted.');
+  if (negativeForm === baseWord) throw new Error('Choose a negated form and a different base word.');
+  if (cartographerNonSimilarPairs.some(pair => pair.negative_form === negativeForm && pair.base_word === baseWord)) {
+    throw new Error('That negation rule is already saved.');
   }
-  const pair = await insertCartographerNonSimilarPair({ word_a: storedWordA, word_b: storedWordB });
+  const [wordA, wordB] = negativeForm < baseWord ? [negativeForm, baseWord] : [baseWord, negativeForm];
+  const pair = await insertCartographerNonSimilarPair({ word_a: wordA, word_b: wordB, negative_form: negativeForm, base_word: baseWord });
   cartographerNonSimilarPairs.push(pair);
+  await rebuildCartographerModel(true);
   cartographerResult = null;
+  cartographerSelectedWord = '';
 }
 async function deleteCartographerGlossaryEntry(id) {
   try {
@@ -1706,22 +1711,22 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
     if (compareForm) compareForm.addEventListener('submit', event => {
       event.preventDefault();
       const data = new FormData(compareForm);
-      cartographerResult = { textA: String(data.get('textA') || ''), textB: String(data.get('textB') || ''), ...compareSemanticText(cartographerModel, data.get('textA'), data.get('textB'), cartographerNonSimilarPairs) };
+      cartographerResult = { textA: String(data.get('textA') || ''), textB: String(data.get('textB') || ''), ...compareSemanticText(cartographerModel, data.get('textA'), data.get('textB'), cartographerNegationRules(), cartographerLegacyNonSimilarPairs()) };
       app();
     });
-    const nonSimilarPairForm = document.querySelector('#cartographer-non-similar-form');
-    if (nonSimilarPairForm) nonSimilarPairForm.addEventListener('submit', async event => {
+    const negationRuleForm = document.querySelector('#cartographer-negation-rule-form');
+    if (negationRuleForm) negationRuleForm.addEventListener('submit', async event => {
       event.preventDefault();
-      const data = new FormData(nonSimilarPairForm);
+      const data = new FormData(negationRuleForm);
       const button = event.submitter;
       if (button) button.disabled = true;
       try {
-        await saveCartographerNonSimilarPair(data.get('wordA'), data.get('wordB'));
-        nonSimilarPairForm.reset();
-        showToast('Non-similar word pair saved.');
+        await saveCartographerNegationRule(data.get('negativeForm'), data.get('baseWord'));
+        negationRuleForm.reset();
+        showToast('Negation rule saved.');
         app();
       } catch (error) {
-        showToast(error.message || 'Word pair could not be saved.', 'error');
+        showToast(error.message || 'Negation rule could not be saved.', 'error');
         if (button) button.disabled = false;
       }
     });

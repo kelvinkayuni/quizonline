@@ -11,7 +11,8 @@ function normalizedSurfaceForm(word) {
 }
 
 function normalizedSingularTerm(word) {
-  return pluralize.singular(normalizedSurfaceForm(word).toLowerCase().replace(/'s$/u, ''));
+  const normalized = normalizedSurfaceForm(word).toLowerCase().replace(/'s$/u, '');
+  return normalized === 'does' ? normalized : pluralize.singular(normalized);
 }
 
 function createGlossaryMap(glossary) {
@@ -33,6 +34,22 @@ export function normalizeSemanticWord(word, glossary = []) {
   return canonicalTerm(surface, createGlossaryMap(glossary));
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function expandNegationRules(text, negationRules, glossary) {
+  let expanded = normalizedSurfaceForm(String(text || '').normalize('NFKC'));
+  for (const rule of negationRules || []) {
+    const negativeForm = normalizeSemanticWord(rule.negative_form ?? rule.negativeForm, glossary);
+    const baseWord = normalizeSemanticWord(rule.base_word ?? rule.baseWord, glossary);
+    if (!negativeForm || !baseWord || negativeForm === baseWord) continue;
+    const pattern = new RegExp(`(^|[^\\p{L}\\p{M}\\p{N}_])${escapeRegExp(negativeForm)}(?=$|[^\\p{L}\\p{M}\\p{N}_])`, 'giu');
+    expanded = expanded.replace(pattern, (_match, prefix) => `${prefix}${baseWord} not`);
+  }
+  return expanded;
+}
+
 function tokenizeWithSurfaceForms(text, glossary) {
   return (String(text || '').normalize('NFKC').match(/[\p{L}][\p{L}\p{M}'’ʼ\-‐‑‒–—−]*/gu) || [])
     .map(raw => {
@@ -47,12 +64,12 @@ function tokenizeWithSurfaceForms(text, glossary) {
     });
 }
 
-export function tokenizeSemanticText(text, glossary = []) {
+export function tokenizeSemanticText(text, glossary = [], negationRules = []) {
   const glossaryMap = createGlossaryMap(glossary);
-  return tokenizeWithSurfaceForms(text, glossaryMap).map(token => token.term);
+  return tokenizeWithSurfaceForms(expandNegationRules(text, negationRules, glossaryMap), glossaryMap).map(token => token.term);
 }
 
-export function trainSemanticModel(documents, glossary = []) {
+export function trainSemanticModel(documents, glossary = [], negationRules = []) {
   const glossaryMap = createGlossaryMap(glossary);
   const frequencies = new Map();
   const surfaceForms = new Map();
@@ -63,7 +80,8 @@ export function trainSemanticModel(documents, glossary = []) {
   let totalPairs = 0;
 
   for (const document of documents || []) {
-    const passages = String(document.text_content || '').normalize('NFKC').split(/(?:[.!?;\n]+|\s+[-*]\s+)/).map(text => tokenizeWithSurfaceForms(text, glossaryMap)).filter(tokens => tokens.length);
+    const expandedText = expandNegationRules(document.text_content, negationRules, glossaryMap);
+    const passages = expandedText.split(/(?:[.!?;\n]+|\s+[-*]\s+)/).map(text => tokenizeWithSurfaceForms(text, glossaryMap)).filter(tokens => tokens.length);
     for (const tokens of passages) {
       const words = tokens.map(token => token.term);
       const passageKey = words.join(' ');
@@ -127,8 +145,9 @@ function addCooccurrence(matrix, word, context, weight) {
   row.set(context, (row.get(context) || 0) + weight);
 }
 
-function vectorForText(model, text) {
-  const passages = String(text || '').split(/(?:[.!?;\n]+|\s+[-*]\s+)/)
+function vectorForText(model, text, negationRules) {
+  const expandedText = expandNegationRules(text, negationRules, model?.glossary);
+  const passages = expandedText.split(/(?:[.!?;\n]+|\s+[-*]\s+)/)
     .map(passage => tokenizeSemanticText(passage, model?.glossary));
   const tokens = passages.flat();
   const vector = new Map();
@@ -171,10 +190,10 @@ function cosineSimilarity(vectorA, vectorB) {
   return Math.max(0, Math.min(1, dot / Math.sqrt(normA * normB)));
 }
 
-export function compareSemanticText(model, textA, textB, nonSimilarPairs = []) {
-  const a = vectorForText(model, textA);
-  const b = vectorForText(model, textB);
-  const nonSimilarPairMatched = nonSimilarPairs.some(pair => {
+export function compareSemanticText(model, textA, textB, negationRules = [], legacyNonSimilarPairs = []) {
+  const a = vectorForText(model, textA, negationRules);
+  const b = vectorForText(model, textB, negationRules);
+  const nonSimilarPairMatched = legacyNonSimilarPairs.some(pair => {
     const wordA = normalizeSemanticWord(pair.word_a ?? pair.wordA, model?.glossary);
     const wordB = normalizeSemanticWord(pair.word_b ?? pair.wordB, model?.glossary);
     return wordA && wordB && (

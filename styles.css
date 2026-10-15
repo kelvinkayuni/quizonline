@@ -249,8 +249,8 @@ tr:last-child td { border: 0; }
 #cartographer-glossary-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: 12px; }
 #cartographer-glossary-form > button { min-height: 40px; white-space: nowrap; }
 .cartographer-non-similar-panel { display: grid; gap: 13px; }
-#cartographer-non-similar-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: 12px; }
-#cartographer-non-similar-form > button { min-height: 40px; white-space: nowrap; }
+#cartographer-negation-rule-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: 12px; }
+#cartographer-negation-rule-form > button { min-height: 40px; white-space: nowrap; }
 .cartographer-non-similar-notice { color: #9f4534; font-weight: 600; }
 .cartographer-glossary-list { display: grid; max-height: 84px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .cartographer-glossary-row { display: flex; min-height: 42px; align-items: center; justify-content: space-between; gap: 14px; border-bottom: 1px solid var(--line); font-size: 12px; }
@@ -261,4 +261,4 @@ tr:last-child td { border: 0; }
 .cartographer-coordinate-readout { flex: 1 0 100%; color: var(--teal); font: 500 11px DM Mono, monospace; }
 @media (max-width: 1050px) { .cartographer-compare { grid-template-columns: 1fr 1.5fr; } .cartographer-score { grid-column: 1 / -1; } }
 @media (max-width: 760px) { .cartographer-ingest-grid, .cartographer-compare { grid-template-columns: 1fr; } .cartographer-score { grid-column: auto; } }
-@media (max-width: 620px) { .cartographer-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .cartographer-stats > div:nth-child(2) { border-right: 0; } .cartographer-stats > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); } #cartographer-compare-form { grid-template-columns: 1fr; } #cartographer-compare-form > button { grid-column: auto; } #cartographer-glossary-form, #cartographer-non-similar-form { grid-template-columns: 1fr; } .cartographer-map { min-height: 220px; } .cartographer-error { align-items: flex-start; flex-direction: column; } }
+@media (max-width: 620px) { .cartographer-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .cartographer-stats > div:nth-child(2) { border-right: 0; } .cartographer-stats > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); } #cartographer-compare-form { grid-template-columns: 1fr; } #cartographer-compare-form > button { grid-column: auto; } #cartographer-glossary-form, #cartographer-negation-rule-form { grid-template-columns: 1fr; } .cartographer-map { min-height: 220px; } .cartographer-error { align-items: flex-start; flex-direction: column; } }
