@@ -193,3 +193,47 @@ tr:last-child td { border: 0; }
 @media (max-width: 900px) { .shell { grid-template-columns: 1fr; } .sidebar { padding: 15px 16px; } .brand { padding: 0 3px 16px; } .nav-label, .sidebar-foot { display: none; } .nav { display: flex; overflow-x: auto; } .nav button { flex: 0 0 auto; } .main { padding: 25px 20px 40px; } .stat-grid { grid-template-columns: repeat(2, 1fr); } .two-col { grid-template-columns: 1fr; } }
 @media (max-width: 620px) { .login-page { grid-template-columns: 1fr; } .login-art { min-height: 290px; padding: 25px; } .art-copy { margin: auto 0 0; } .art-copy h1 { font-size: 45px; } .art-copy p, .art-note { display: none; } .login-side { padding: 28px 20px; } .topbar { align-items: flex-start; flex-direction: column; } .form-grid, .short-answer-form-grid { grid-template-columns: 1fr; } .field.full { grid-column: auto; } .panel { padding: 17px; } .quiz-top { align-items: flex-start; flex-direction: column; margin-bottom: 33px; } .quiz-card { padding: 22px; } .quiz-question { font-size: 23px; } }
 @media (max-width: 620px) { .quiz-question-history-item { grid-template-columns: minmax(0, 1fr) auto; gap: 10px; } .quiz-question-history-details { display: grid; gap: 4px; } }
+.cartographer-workspace { display: grid; gap: 18px; }
+.cartographer-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.cartographer-stats > div { display: grid; gap: 10px; min-width: 0; padding: 17px 19px; border-right: 1px solid var(--line); }
+.cartographer-stats > div:last-child { border-right: 0; }
+.cartographer-stats strong { overflow: hidden; font-size: 20px; text-overflow: ellipsis; white-space: nowrap; }
+.cartographer-stats .cartographer-status { color: var(--teal); font-size: 14px; }
+.cartographer-ingest-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(300px, .95fr); gap: 18px; }
+.cartographer-drop { display: grid; justify-items: center; gap: 8px; min-height: 142px; padding: 20px; border: 1px dashed #8caea3; border-radius: 7px; background: #eef5ef; text-align: center; cursor: pointer; }
+.cartographer-drop:hover { border-color: var(--teal); background: #e7f1e9; }
+.cartographer-drop .upload-icon { line-height: 1; }
+.cartographer-drop input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+.cartographer-text-form { display: grid; gap: 13px; margin-top: 17px; }
+.cartographer-text-form textarea { min-height: 100px; }
+.cartographer-note { margin: 14px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.cartographer-document-list { display: grid; max-height: 435px; overflow: auto; }
+.cartographer-document { display: grid; grid-template-columns: 38px minmax(0, 1fr) 32px; gap: 10px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.cartographer-document:last-child { border-bottom: 0; }
+.cartographer-document-kind { display: grid; width: 36px; height: 30px; place-items: center; border-radius: 5px; background: var(--teal-soft); color: var(--teal); font: 500 10px DM Mono, monospace; }
+.cartographer-document-name { display: grid; min-width: 0; gap: 4px; }
+.cartographer-document-name strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.cartographer-document-name small { color: var(--muted); font-size: 10px; }
+.cartographer-delete { width: 30px; height: 30px; border: 0; border-radius: 5px; background: transparent; color: #b84d38; font-size: 20px; }
+.cartographer-delete:hover { background: #fff0eb; }
+.cartographer-map-panel { min-width: 0; }
+.cartographer-map { display: block; width: 100%; min-height: 280px; overflow: hidden; border: 1px solid #e2e8e1; border-radius: 7px; background-color: #fbfcf8; background-image: linear-gradient(#e9eee8 1px, transparent 1px), linear-gradient(90deg, #e9eee8 1px, transparent 1px); background-size: 40px 40px; }
+.cartographer-map text { fill: #273b38; font: 11px 'DM Mono', monospace; pointer-events: none; }
+.cartographer-node { cursor: pointer; outline: none; }
+.cartographer-node circle { stroke: white; stroke-width: 2px; transition: r .15s ease, stroke-width .15s ease; }
+.cartographer-node:hover circle, .cartographer-node:focus circle, .cartographer-node.selected circle { stroke: #20252b; stroke-width: 3px; }
+.cartographer-empty { display: grid; min-height: 280px; place-items: center; border: 1px solid #e2e8e1; border-radius: 7px; color: var(--muted); background: #fbfcf8; font-size: 13px; }
+.cartographer-selection { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; font-size: 12px; }
+.cartographer-selection > span:not(.badge) { color: var(--muted); }
+.cartographer-compare { display: grid; grid-template-columns: minmax(180px, .7fr) minmax(0, 1.3fr) minmax(140px, .6fr); align-items: start; gap: 22px; }
+.cartographer-compare > div:first-child .subtle { margin: 8px 0 0; line-height: 1.6; }
+#cartographer-compare-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+#cartographer-compare-form .field textarea { min-height: 104px; }
+#cartographer-compare-form > button { grid-column: 1 / -1; justify-self: start; }
+.cartographer-score { display: grid; gap: 10px; padding: 13px; border-left: 2px solid var(--coral); background: #fbf8f2; }
+.cartographer-score strong { font-size: 32px; }
+.cartographer-score p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.cartographer-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border: 1px solid #e8b6a9; border-radius: 7px; color: #9f4534; background: #fff3ef; font-size: 12px; }
+@media (max-width: 1050px) { .cartographer-compare { grid-template-columns: 1fr 1.5fr; } .cartographer-score { grid-column: 1 / -1; } }
+@media (max-width: 760px) { .cartographer-ingest-grid, .cartographer-compare { grid-template-columns: 1fr; } .cartographer-score { grid-column: auto; } }
+@media (max-width: 620px) { .cartographer-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .cartographer-stats > div:nth-child(2) { border-right: 0; } .cartographer-stats > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); } #cartographer-compare-form { grid-template-columns: 1fr; } #cartographer-compare-form > button { grid-column: auto; } .cartographer-map { min-height: 220px; } .cartographer-error { align-items: flex-start; flex-direction: column; } }

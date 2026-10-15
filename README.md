@@ -34,6 +34,12 @@ Create the teacher user in Supabase Auth before running the quiz question histor
 - Questions, quiz configuration, imported student accounts, and completed attempts synchronize with Supabase. Active student quiz progress is saved in a dedicated Supabase table so it can resume on another device; browser login sessions remain browser-local.
 - `.xlsx` student import and results download through SheetJS.
 
+## Semantic Cartographer
+
+The teacher workspace includes a standalone Cartographer for adding PDF or text course material, exploring corpus word associations, and comparing phrases. It does not run during student quizzes and does not change current short-answer marking.
+
+Before using it, run [`supabase-semantic-cartographer.sql`](supabase-semantic-cartographer.sql) in the Supabase SQL Editor. The migration stores extracted text in a separate table protected by the authenticated teacher role. PDF extraction and the experimental word-context model run in the browser; no Gemini API or external model key is used. The corpus similarity score is exploratory and is not a trained language model or a grade.
+
 Supabase tables and Row Level Security policies must exist before synchronization can succeed. The browser uses only `SUPABASE_URL` and `SUPABASE_ANON_KEY`; never expose `SUPABASE_SERVICE_ROLE_KEY` in frontend code.
 
 ## Shared workspace table

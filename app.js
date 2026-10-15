@@ -1,6 +1,8 @@
 function courseDisplayValue(value) { const normalized = String(value || '').trim(); return normalized === '34' || normalized.toLowerCase() === 'course' ? '' : normalized; }
 function studentCourseDetails() { const courseName = courseDisplayValue(state.config.courseName); const courseCode = courseDisplayValue(state.config.courseCode); return courseName || courseCode ? `<div class="course-banner">${courseName ? `<strong>${esc(courseName)}</strong>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''; }
 import { supabase } from './supabase.js';
+import { extractCartographerFile, insertCartographerDocument, listCartographerDocuments, removeCartographerDocument } from './semanticCorpus.js';
+import { compareSemanticText, createSemanticMap, trainSemanticModel } from './semanticModel.js';
 import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, deleteTeacherQuizQuestionHistory, hydrateQuizState, listTeacherQuizQuestionHistory, loadStudentQuizReport, loadStudentQuizResult, loadTeacherQuizQuestionHistory, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizConfiguration, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAccessChange, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt, waitForPendingQuestionSaves } from './supabaseStore.js';
 import { loadStudentPresence, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { SHORT_ANSWER_FULL_CREDIT_THRESHOLD, roundToOneDecimal, shortAnswerMarksAwarded, shortAnswerMatchScore } from './shortAnswerMatching.js';
@@ -209,6 +211,13 @@ if (!Array.isArray(state.deactivatedStudentUsernames)) state.deactivatedStudentU
 if (typeof state.configSaved !== 'boolean') state.configSaved = false;
 if (!state.importedFile) { state.users = []; saveState(); }
 let teacherView = 'overview';
+let cartographerDocuments = [];
+let cartographerModel = null;
+let cartographerResult = null;
+let cartographerSelectedWord = '';
+let cartographerLoading = false;
+let cartographerLoaded = false;
+let cartographerLoadError = '';
 let teacherQuestionHistory = [];
 let questionHistoryVisible = false;
 let questionHistoryLoading = false;
@@ -538,13 +547,61 @@ function loginApp() {
 }
 function teacherApp() {
   const view = teacherView;
-  return `<div class="shell"><aside class="sidebar"><div class="brand"><span class="brand-mark">OQ</span><strong>ONLINE QUIZ</strong></div><div class="eyebrow nav-label">Workspace</div><nav class="nav">${navButton('grid', 'Overview', 'overview', view)}${navButton('question', 'Question bank', 'questions', view)}${navButton('settings', 'Quiz configuration', 'config', view)}${navButton('users', 'Student access', 'users', view)}${navButton('results', 'Results & monitoring', 'results', view)}</nav><div class="sidebar-foot">Teacher workspace<br /><span>All changes save locally</span></div></aside><main class="main"><header class="topbar"><div><div class="eyebrow kicker">Teacher workspace</div><h1>${viewTitle(view)}</h1><p class="subtle">${viewDescription(view)}</p></div><div class="user-chip"><span class="avatar">KK</span><span>Kelvin Kayuni</span><button class="btn btn-small btn-secondary" data-action="logout">Exit</button></div></header>${viewContent(view)}</main></div>`;
+  return `<div class="shell"><aside class="sidebar"><div class="brand"><span class="brand-mark">OQ</span><strong>ONLINE QUIZ</strong></div><div class="eyebrow nav-label">Workspace</div><nav class="nav">${navButton('grid', 'Overview', 'overview', view)}${navButton('question', 'Question bank', 'questions', view)}${navButton('settings', 'Quiz configuration', 'config', view)}${navButton('users', 'Student access', 'users', view)}${navButton('results', 'Results & monitoring', 'results', view)}${navButton('book', 'Semantic Cartographer', 'cartographer', view)}</nav><div class="sidebar-foot">Teacher workspace<br /><span>All changes save locally</span></div></aside><main class="main"><header class="topbar"><div><div class="eyebrow kicker">Teacher workspace</div><h1>${viewTitle(view)}</h1><p class="subtle">${viewDescription(view)}</p></div><div class="user-chip"><span class="avatar">KK</span><span>Kelvin Kayuni</span><button class="btn btn-small btn-secondary" data-action="logout">Exit</button></div></header>${viewContent(view)}</main></div>`;
 }
 function navButton(iconName, label, target, active) { return `<button class="${target === active ? 'active' : ''}" data-view="${target}"><span class="nav-icon">${icon(iconName)}</span>${label}</button>`; }
 function timeGreeting() { const hour = new Date().getHours(); if (hour >= 5 && hour < 12) return 'Good morning'; if (hour >= 12 && hour < 17) return 'Good afternoon'; if (hour >= 17 && hour < 21) return 'Good evening'; return 'Good night'; }
-function viewTitle(view) { return ({ overview: `${timeGreeting()}, Kelvin.`, questions: 'Question bank', config: 'Quiz configuration', users: 'Student access', results: 'Results & monitoring' }[view]); }
-function viewDescription(view) { return ({ overview: 'A live view of your assessment workspace.', questions: 'Build reusable questions with flexible scoring.', config: 'Set the rules, timing, and availability window.', users: 'Import and manage student login credentials.', results: 'Track participation and export completed work.' }[view]); }
-function viewContent(view) { const content = ({ overview: overviewView, questions: questionsView, config: configView, users: usersView, results: resultsView }[view])(); return view === 'results' ? `${content}${resultFileSelectionPanel()}` : content; }
+function viewTitle(view) { return ({ overview: `${timeGreeting()}, Kelvin.`, questions: 'Question bank', config: 'Quiz configuration', users: 'Student access', results: 'Results & monitoring', cartographer: 'Semantic Cartographer' }[view]); }
+function viewDescription(view) { return ({ overview: 'A live view of your assessment workspace.', questions: 'Build reusable questions with flexible scoring.', config: 'Set the rules, timing, and availability window.', users: 'Import and manage student login credentials.', results: 'Track participation and export completed work.', cartographer: 'Build a course corpus and explore its semantic relationships.' }[view]); }
+function viewContent(view) { const content = ({ overview: overviewView, questions: questionsView, config: configView, users: usersView, results: resultsView, cartographer: cartographerView }[view])(); return view === 'results' ? `${content}${resultFileSelectionPanel()}` : content; }
+function cartographerView() {
+  const model = cartographerModel;
+  const map = model ? createSemanticMap(model) : { nodes: [], edges: [] };
+  const palette = ['#176b63', '#e2694f', '#277da1', '#bc7b19', '#39845a', '#8c5b47'];
+  const graph = map.nodes.length ? `<svg class="cartographer-map" viewBox="0 0 900 560" role="img" aria-label="Semantic word map">${map.edges.map(edge => `<line x1="${edge.x1}" y1="${edge.y1}" x2="${edge.x2}" y2="${edge.y2}" stroke="#91a6a0" stroke-opacity="${Math.min(.55, edge.similarity * .62)}" stroke-width="${Math.max(.7, edge.similarity * 2.2)}" />`).join('')}${map.nodes.map((node, index) => `<g class="cartographer-node ${cartographerSelectedWord === node.word ? 'selected' : ''}" data-cartographer-word="${esc(node.word)}" tabindex="0" role="button" aria-label="Inspect ${esc(node.word)}"><circle cx="${node.x}" cy="${node.y}" r="${Math.min(12, 5 + Math.log2(node.count + 1) * 1.4)}" fill="${palette[index % palette.length]}" /><text x="${node.x}" y="${node.y - 13}" text-anchor="middle">${esc(node.word)}</text></g>`).join('')}</svg>` : `<div class="cartographer-empty">${cartographerLoading ? 'Loading the teacher corpus…' : 'Add course material to build the first map.'}</div>`;
+  const selected = map.nodes.find(node => node.word === cartographerSelectedWord);
+  const neighbors = selected && model ? model.terms.map(term => ({ word: term.word, score: compareSemanticText(model, selected.word, term.word).score })).filter(item => item.word !== selected.word).sort((a, b) => b.score - a.score).slice(0, 5) : [];
+  const result = cartographerResult;
+  return `<div class="cartographer-workspace"><section class="cartographer-stats"><div><span class="eyebrow">Corpus documents</span><strong>${cartographerDocuments.length}</strong></div><div><span class="eyebrow">Indexed terms</span><strong>${model?.stats.terms || 0}</strong></div><div><span class="eyebrow">Text passages</span><strong>${model?.stats.passages || 0}</strong></div><div><span class="eyebrow">Model</span><strong class="cartographer-status">${cartographerLoadError ? 'Needs setup' : cartographerLoading ? 'Loading' : model?.stats.terms ? 'Corpus ready' : 'No corpus'}</strong></div></section>${cartographerLoadError ? `<div class="cartographer-error" role="alert">${esc(cartographerLoadError)} <button class="btn btn-secondary btn-small" data-action="cartographer-reload">Retry</button></div>` : ''}<section class="cartographer-ingest-grid"><div class="card panel"><div class="panel-head"><div><h2>Train from material</h2><p class="subtle">PDF, text files, or pasted course notes</p></div></div><label class="cartographer-drop" for="cartographer-files"><span class="upload-icon">↑</span><strong>Select PDF or text files</strong><span class="subtle">Files are extracted in this browser.</span><input id="cartographer-files" type="file" accept=".pdf,.txt,text/plain,application/pdf" multiple /></label><form id="cartographer-text-form" class="cartographer-text-form"><div class="field"><label for="cartographer-document-name">Document title</label><input id="cartographer-document-name" name="name" maxlength="120" placeholder="e.g. Gemstone properties" required /></div><div class="field"><label for="cartographer-document-text">Paste course text</label><textarea id="cartographer-document-text" name="content" maxlength="300000" placeholder="Paste text from your course material" required></textarea></div><button class="btn btn-primary" type="submit" ${cartographerLoading ? 'disabled' : ''}>Add to corpus</button></form><p class="cartographer-note">Corpus associations are computed locally from the uploaded texts. This is an experimental word-context model, not a fine-tuned language model. Similarity scores are for teacher review only and are not connected to quiz marks.</p></div><div class="card panel"><div class="panel-head"><div><h2>Training corpus</h2><p class="subtle">${cartographerDocuments.length} source${cartographerDocuments.length === 1 ? '' : 's'} · stored in the teacher account</p></div><button class="btn btn-secondary btn-small" data-action="cartographer-reload" ${cartographerLoading ? 'disabled' : ''} title="Reload corpus">↻</button></div><div class="cartographer-document-list">${cartographerDocuments.length ? cartographerDocuments.map(document => `<div class="cartographer-document"><span class="cartographer-document-kind">${document.source_type === 'pdf' ? 'PDF' : 'TXT'}</span><span class="cartographer-document-name"><strong>${esc(document.name)}</strong><small>${document.word_count || 0} words · ${new Date(document.created_at).toLocaleDateString()}</small></span><button class="cartographer-delete" data-action="cartographer-delete" data-id="${esc(document.id)}" aria-label="Remove ${esc(document.name)}" title="Remove document">×</button></div>`).join('') : `<div class="empty">${cartographerLoading ? 'Loading saved documents…' : 'No documents have been added.'}</div>`}</div></div></section><section class="card panel cartographer-map-panel"><div class="panel-head"><div><h2>Semantic word space</h2><p class="subtle">${map.nodes.length} frequent terms · lines show contextual associations</p></div><button class="btn btn-secondary btn-small" data-action="cartographer-train" ${!cartographerDocuments.length || cartographerLoading ? 'disabled' : ''}>Rebuild map</button></div>${graph}${selected ? `<div class="cartographer-selection"><strong>${esc(selected.word)}</strong><span>Appears ${selected.count} times. Closest corpus terms:</span>${neighbors.map(item => `<span class="badge">${esc(item.word)} · ${item.score}%</span>`).join('')}</div>` : ''}</section><section class="card panel cartographer-compare"><div><div class="eyebrow kicker">Corpus similarity lab</div><h2>Compare words or sentences</h2><p class="subtle">Scores reflect contextual patterns in the current corpus. Unknown terms are excluded from the comparison.</p></div><form id="cartographer-compare-form"><div class="field"><label for="cartographer-text-a">Text A</label><textarea id="cartographer-text-a" name="textA" maxlength="5000" required>${esc(result?.textA || '')}</textarea></div><div class="field"><label for="cartographer-text-b">Text B</label><textarea id="cartographer-text-b" name="textB" maxlength="5000" required>${esc(result?.textB || '')}</textarea></div><button class="btn btn-primary" type="submit" ${!model ? 'disabled' : ''}>Compare in corpus</button></form>${result ? `<div class="cartographer-score"><span class="eyebrow">Corpus similarity</span><strong>${result.score}%</strong><div class="progress"><span style="width:${result.score}%"></span></div><p>${result.knownA} known terms in A · ${result.knownB} known terms in B · ${result.coverage}% corpus coverage</p></div>` : ''}</section></div>`;
+}
+async function loadCartographerCorpus() {
+  if (cartographerLoading) return;
+  cartographerLoading = true;
+  cartographerLoadError = '';
+  app();
+  try {
+    cartographerDocuments = await listCartographerDocuments();
+    cartographerModel = trainSemanticModel(cartographerDocuments);
+    cartographerLoaded = true;
+  } catch (error) {
+    cartographerLoadError = error.message || 'Could not load the Cartographer corpus.';
+  } finally {
+    cartographerLoading = false;
+    app();
+  }
+}
+async function saveCartographerDocument(name, sourceType, text) {
+  const normalizedText = String(text || '').trim();
+  if (normalizedText.length < 40) throw new Error('Add at least 40 characters of course text.');
+  if (normalizedText.length > 300000) throw new Error('Each document is limited to 300,000 extracted characters.');
+  const document = await insertCartographerDocument({ name: String(name || 'Untitled document').trim().slice(0, 120), source_type: sourceType, text_content: normalizedText, word_count: normalizedText.match(/[\p{L}\p{N}]+/gu)?.length || 0 });
+  cartographerDocuments.unshift(document);
+  cartographerModel = trainSemanticModel(cartographerDocuments);
+  cartographerResult = null;
+  cartographerLoaded = true;
+}
+async function deleteCartographerDocument(id) {
+  try {
+    await removeCartographerDocument(id);
+    cartographerDocuments = cartographerDocuments.filter(document => document.id !== id);
+    cartographerModel = trainSemanticModel(cartographerDocuments);
+    cartographerResult = null;
+    cartographerSelectedWord = '';
+    app();
+  } catch (error) {
+    showToast(`Document could not be removed: ${error.message || error}`, 'error');
+  }
+}
 function overviewView() {
   const online = state.users.filter(user => user.status === 'online').length;
   const average = state.results.length ? Math.round(state.results.reduce((sum, item) => sum + item.percentage, 0) / state.results.length) : 0;
@@ -1418,6 +1475,57 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
   document.querySelectorAll('[data-answer]').forEach(button => button.addEventListener('click', () => { if (!session || session.completed || state.quizStopped) return; if (!session.feedback) { session.selected = Number(button.dataset.answer); saveStudentSession(); app(); } }));
   const submit = document.querySelector('[data-action="submit-answer"]'); if (submit) submit.addEventListener('click', submitAnswer);
   const next = document.querySelector('[data-action="next-question"]'); if (next) next.addEventListener('click', nextQuestion);
+  if (session?.role === 'teacher' && teacherView === 'cartographer') {
+    if (!cartographerLoaded && !cartographerLoading && !cartographerLoadError) void loadCartographerCorpus();
+    const reload = document.querySelectorAll('[data-action="cartographer-reload"]');
+    reload.forEach(button => button.addEventListener('click', () => { cartographerLoaded = false; cartographerLoadError = ''; void loadCartographerCorpus(); }));
+    const upload = document.querySelector('#cartographer-files');
+    if (upload) upload.addEventListener('change', async event => {
+      const files = [...event.currentTarget.files];
+      if (!files.length) return;
+      event.currentTarget.disabled = true;
+      try {
+        for (const file of files) {
+          const extracted = await extractCartographerFile(file);
+          await saveCartographerDocument(extracted.name, extracted.source_type, extracted.text_content);
+        }
+        showToast(`${files.length} document${files.length === 1 ? '' : 's'} added to the Cartographer corpus.`);
+      } catch (error) {
+        showToast(error.message || 'Document could not be added.', 'error');
+      } finally {
+        app();
+      }
+    });
+    const textForm = document.querySelector('#cartographer-text-form');
+    if (textForm) textForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const data = new FormData(textForm);
+      const button = event.submitter;
+      if (button) button.disabled = true;
+      try {
+        await saveCartographerDocument(data.get('name'), 'text', data.get('content'));
+        showToast('Course text added and map rebuilt.');
+        app();
+      } catch (error) {
+        showToast(error.message || 'Course text could not be added.', 'error');
+        if (button) button.disabled = false;
+      }
+    });
+    const compareForm = document.querySelector('#cartographer-compare-form');
+    if (compareForm) compareForm.addEventListener('submit', event => {
+      event.preventDefault();
+      const data = new FormData(compareForm);
+      cartographerResult = { textA: String(data.get('textA') || ''), textB: String(data.get('textB') || ''), ...compareSemanticText(cartographerModel, data.get('textA'), data.get('textB')) };
+      app();
+    });
+    document.querySelector('[data-action="cartographer-train"]')?.addEventListener('click', () => { cartographerModel = trainSemanticModel(cartographerDocuments); cartographerSelectedWord = ''; cartographerResult = null; app(); });
+    document.querySelectorAll('[data-action="cartographer-delete"]').forEach(button => button.addEventListener('click', () => { void deleteCartographerDocument(button.dataset.id); }));
+    document.querySelectorAll('[data-cartographer-word]').forEach(node => {
+      const selectWord = () => { cartographerSelectedWord = node.dataset.cartographerWord; app(); };
+      node.addEventListener('click', selectWord);
+      node.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectWord(); } });
+    });
+  }
   if (session?.role === 'student' && !session.completed && session.started && document.querySelector('#timer')) startTimer();
 }
 async function handleLogin(event) {
