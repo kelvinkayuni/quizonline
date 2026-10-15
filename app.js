@@ -627,6 +627,8 @@ async function saveCartographerDocument(name, sourceType, text) {
   cartographerLoaded = true;
 }
 async function deleteCartographerDocument(id) {
+  const document = cartographerDocuments.find(item => item.id === id);
+  if (!document || !window.confirm(`Delete "${document.name}" from the training corpus? Its text will be removed and the semantic model rebuilt without it.`)) return;
   try {
     await removeCartographerDocument(id);
     cartographerDocuments = cartographerDocuments.filter(document => document.id !== id);
