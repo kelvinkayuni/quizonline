@@ -447,6 +447,9 @@ function ensureStudentQuestionOrder() {
 }
 function app() {
   const studentDirectoryScrollTop = document.querySelector('.student-account-actions + .table-wrap')?.scrollTop;
+  const cartographerMapScroll = document.querySelector('.cartographer-map-scroll');
+  const cartographerMapScrollPosition = cartographerMapScroll ? { top: cartographerMapScroll.scrollTop, left: cartographerMapScroll.scrollLeft } : null;
+  const cartographerDocumentScrollTop = document.querySelector('.cartographer-document-list')?.scrollTop;
   if (session && !stateHydrated) {
     document.querySelector('#app').innerHTML = '<main class="main"><div class="quiz-shell"><section class="card result-hero"><div class="eyebrow">Connecting</div><h2>Loading the current workspace...</h2></section></div></main>';
     return;
@@ -458,6 +461,15 @@ function app() {
   const studentDirectoryTable = document.querySelector('.student-account-actions + .table-wrap');
   if (studentDirectoryTable && studentDirectoryScrollTop !== undefined) {
     studentDirectoryTable.scrollTop = studentDirectoryScrollTop;
+  }
+  const refreshedCartographerMap = document.querySelector('.cartographer-map-scroll');
+  if (refreshedCartographerMap && cartographerMapScrollPosition) {
+    refreshedCartographerMap.scrollTop = cartographerMapScrollPosition.top;
+    refreshedCartographerMap.scrollLeft = cartographerMapScrollPosition.left;
+  }
+  const refreshedCartographerDocuments = document.querySelector('.cartographer-document-list');
+  if (refreshedCartographerDocuments && cartographerDocumentScrollTop !== undefined) {
+    refreshedCartographerDocuments.scrollTop = cartographerDocumentScrollTop;
   }
   renderQuizFileSelectDropdown();
   updateStudentLastSeenCells();
