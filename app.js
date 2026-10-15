@@ -221,6 +221,9 @@ let cartographerResult = null;
 let cartographerSelectedWord = '';
 let cartographerZoom = 1;
 let cartographerLoading = false;
+let cartographerUploading = false;
+let cartographerUploadStatus = '';
+let cartographerUploadStatusType = 'info';
 let cartographerLoaded = false;
 let cartographerLoadError = '';
 let teacherQuestionHistory = [];
@@ -750,6 +753,28 @@ function injectCartographerNonSimilarPairNotice() {
   notice.className = 'cartographer-note cartographer-non-similar-notice';
   notice.textContent = 'A saved non-similar word pair matched; the score was set to 0.';
   score.append(notice);
+}
+function updateCartographerUploadStatus() {
+  const drop = document.querySelector('.cartographer-drop');
+  if (!drop) return;
+  let status = document.querySelector('#cartographer-upload-status');
+  if (!status) {
+    status = document.createElement('div');
+    status.id = 'cartographer-upload-status';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+    drop.insertAdjacentElement('afterend', status);
+  }
+  status.className = `cartographer-upload-status ${cartographerUploadStatusType}`;
+  status.textContent = cartographerUploadStatus;
+  status.hidden = !cartographerUploadStatus;
+  const input = document.querySelector('#cartographer-files');
+  if (input) input.disabled = cartographerUploading;
+}
+function setCartographerUploadStatus(message, type = 'info') {
+  cartographerUploadStatus = message;
+  cartographerUploadStatusType = type;
+  app();
 }
 async function saveCartographerGlossaryEntry(alias, canonicalTerm) {
   const aliasTerm = String(alias || '').normalize('NFKC').trim().toLowerCase();
@@ -1672,6 +1697,7 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
     injectCartographerNonSimilarPairForm();
     injectCartographerCoordinatePlane();
     injectCartographerNonSimilarPairNotice();
+    updateCartographerUploadStatus();
     if (!cartographerLoaded && !cartographerLoading && !cartographerLoadError) void loadCartographerCorpus();
     const reload = document.querySelectorAll('[data-action="cartographer-reload"]');
     reload.forEach(button => button.addEventListener('click', () => { cartographerLoaded = false; cartographerLoadError = ''; void loadCartographerCorpus(); }));
@@ -1679,16 +1705,32 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
     if (upload) upload.addEventListener('change', async event => {
       const files = [...event.currentTarget.files];
       if (!files.length) return;
-      event.currentTarget.disabled = true;
+      cartographerUploading = true;
+      const failures = [];
+      let added = 0;
       try {
-        for (const file of files) {
-          const extracted = await extractCartographerFile(file);
-          await saveCartographerDocument(extracted.name, extracted.source_type, extracted.text_content);
+        for (let index = 0; index < files.length; index++) {
+          const file = files[index];
+          setCartographerUploadStatus(`Extracting text from ${file.name} (${index + 1} of ${files.length})…`);
+          try {
+            const extracted = await extractCartographerFile(file);
+            setCartographerUploadStatus(`Saving ${file.name} and rebuilding the corpus model (${index + 1} of ${files.length})…`);
+            await saveCartographerDocument(extracted.name, extracted.source_type, extracted.text_content);
+            added++;
+          } catch (error) {
+            failures.push(`${file.name}: ${error.message || 'Upload failed.'}`);
+          }
         }
-        showToast(`${files.length} document${files.length === 1 ? '' : 's'} added to the Cartographer corpus.`);
-      } catch (error) {
-        showToast(error.message || 'Document could not be added.', 'error');
+        if (failures.length) {
+          const status = `${added} of ${files.length} documents added. Failed: ${failures.join(' | ')}`;
+          setCartographerUploadStatus(status, 'error');
+          showToast(`${added} of ${files.length} documents added; ${failures.length} failed. See upload status.`, 'error');
+        } else {
+          setCartographerUploadStatus(`${added} document${added === 1 ? '' : 's'} added to the Cartographer corpus.`, 'success');
+          showToast(`${added} document${added === 1 ? '' : 's'} added to the Cartographer corpus.`);
+        }
       } finally {
+        cartographerUploading = false;
         app();
       }
     });

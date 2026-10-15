@@ -204,6 +204,10 @@ tr:last-child td { border: 0; }
 .cartographer-drop:hover { border-color: var(--teal); background: #e7f1e9; }
 .cartographer-drop .upload-icon { line-height: 1; }
 .cartographer-drop input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+.cartographer-upload-status { margin-top: 10px; overflow-wrap: anywhere; font-size: 11px; line-height: 1.5; }
+.cartographer-upload-status.info { color: var(--muted); }
+.cartographer-upload-status.success { color: var(--teal); }
+.cartographer-upload-status.error { color: #9f4534; }
 .cartographer-text-form { display: grid; gap: 13px; margin-top: 17px; }
 .cartographer-text-form textarea { min-height: 100px; }
 .cartographer-note { margin: 14px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
