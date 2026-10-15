@@ -217,8 +217,13 @@ tr:last-child td { border: 0; }
 .cartographer-delete { width: 30px; height: 30px; border: 0; border-radius: 5px; background: transparent; color: #b84d38; font-size: 20px; }
 .cartographer-delete:hover { background: #fff0eb; }
 .cartographer-map-panel { min-width: 0; }
+.cartographer-map-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.cartographer-zoom-button { display: grid; width: 32px; height: 32px; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 5px; color: var(--ink); background: var(--panel); font-size: 18px; line-height: 1; }
+.cartographer-zoom-button:hover:not(:disabled) { border-color: var(--teal); color: var(--teal); background: var(--teal-soft); }
+.cartographer-zoom-level { min-width: 42px; color: var(--muted); font: 500 10px DM Mono, monospace; text-align: center; }
 .cartographer-map { display: block; width: 100%; min-height: 280px; overflow: hidden; border: 1px solid #e2e8e1; border-radius: 7px; background: #fbfcf8; }
 .cartographer-map text { fill: #273b38; font: 11px 'DM Mono', monospace; pointer-events: none; }
+.cartographer-map .cartographer-word-label { fill: #354640; font-size: 6px; opacity: .72; }
 .cartographer-plane-layer { pointer-events: none; }
 .cartographer-plane-layer .cartographer-gridline { stroke: #dfe7df; stroke-width: 1px; }
 .cartographer-plane-layer .cartographer-axisline { stroke: #82938a; stroke-width: 1.6px; }
