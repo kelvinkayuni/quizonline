@@ -222,6 +222,31 @@ function comparisonContainsWord(text, word, glossary) {
   return words.some(candidate => normalizeSemanticWord(candidate, glossary) === word);
 }
 
+function normalizeCalibrationPair(pair, glossary) {
+  const wordA = normalizeSemanticWord(pair.word_a ?? pair.wordA ?? pair.left ?? pair.term_a ?? pair.a, glossary);
+  const wordB = normalizeSemanticWord(pair.word_b ?? pair.wordB ?? pair.right ?? pair.term_b ?? pair.b, glossary);
+  const similarity = Number(pair.similarity ?? pair.weight ?? pair.value ?? 0);
+  if (!wordA || !wordB || wordA === wordB || !Number.isFinite(similarity) || similarity < 40 || similarity > 80) return null;
+  return { wordA, wordB, similarity: similarity / 100 };
+}
+
+function calibrationPairMatch(textA, textB, pair, glossary) {
+  if (!pair) return false;
+  const leftMatches = comparisonContainsWord(textA, pair.wordA, glossary) && comparisonContainsWord(textB, pair.wordB, glossary);
+  const reverseMatches = comparisonContainsWord(textA, pair.wordB, glossary) && comparisonContainsWord(textB, pair.wordA, glossary);
+  return leftMatches || reverseMatches;
+}
+
+function calibrationPairCoverage(textA, textB, pair, glossary, negationRules) {
+  const termsA = tokenizeSemanticText(textA, glossary, negationRules);
+  const termsB = tokenizeSemanticText(textB, glossary, negationRules);
+  if (!termsA.length || !termsB.length) return 0;
+  const count = (terms, target) => terms.filter(term => term === target).length;
+  const matchedPairs = Math.min(count(termsA, pair.wordA), count(termsB, pair.wordB))
+    + Math.min(count(termsA, pair.wordB), count(termsB, pair.wordA));
+  return Math.min(1, (matchedPairs / termsA.length + matchedPairs / termsB.length) / 2);
+}
+
 function sentencePolarityEvidence(text, glossary, negationRules = []) {
   const expandedText = expandNegationRules(text, negationRules, glossary);
   const evidence = new Map();
@@ -268,7 +293,7 @@ function cosineSimilarity(vectorA, vectorB) {
   return Math.max(0, Math.min(1, dot / Math.sqrt(normA * normB)));
 }
 
-export function compareSemanticText(model, textA, textB, negationRules = [], legacyNonSimilarPairs = []) {
+export function compareSemanticText(model, textA, textB, negationRules = [], legacyNonSimilarPairs = [], similarityPairs = []) {
   const a = vectorForText(model, textA, negationRules);
   const b = vectorForText(model, textB, negationRules);
   const nonSimilarPairMatched = legacyNonSimilarPairs.some(pair => {
@@ -280,6 +305,13 @@ export function compareSemanticText(model, textA, textB, negationRules = [], leg
     );
   });
   const polarityMismatch = sentencePolarityMismatch(textA, textB, model?.glossary, negationRules);
+  const calibrationPair = (similarityPairs || [])
+    .map(pair => normalizeCalibrationPair(pair, model?.glossary))
+    .find(pair => calibrationPairMatch(textA, textB, pair, model?.glossary));
+  const calibrationWeight = calibrationPair ? calibrationPair.similarity : 0;
+  const calibrationCoverage = calibrationPair
+    ? calibrationPairCoverage(textA, textB, calibrationPair, model?.glossary, negationRules)
+    : 0;
   const baseScore = cosineSimilarity(a.vector, b.vector);
   const actionRoleBoost = (() => {
     const vectorA = actionRoleVectorForText(textA, model?.glossary);
@@ -295,13 +327,20 @@ export function compareSemanticText(model, textA, textB, negationRules = [], leg
     return cosineSimilarity(paddedA, paddedB);
   })();
   const blendedScore = (nonSimilarPairMatched || polarityMismatch) ? 0 : Math.max(0, Math.min(1, baseScore * 0.85 + actionRoleBoost * 0.15));
-  const finalScore = (nonSimilarPairMatched || polarityMismatch) ? 0 : Math.max(baseScore, blendedScore);
+  const uncalibratedScore = Math.max(baseScore, blendedScore);
+  const calibratedScore = calibrationPair
+    ? uncalibratedScore * (1 - calibrationCoverage) + calibrationWeight * calibrationCoverage
+    : uncalibratedScore;
+  const finalScore = (nonSimilarPairMatched || polarityMismatch) ? 0 : calibratedScore;
   const coverageCount = a.known + b.known;
   const totalCount = a.total + b.total;
   return {
     score: Math.round(finalScore * 100),
     baseScore: Math.round(baseScore * 100),
     roleBoost: actionRoleBoost,
+    calibrationWeight: calibrationWeight * 100,
+    calibrationCoverage: calibrationCoverage * 100,
+    calibrationPair: calibrationPair ? { wordA: calibrationPair.wordA, wordB: calibrationPair.wordB, similarity: calibrationPair.similarity * 100 } : null,
     nonSimilarPairMatched,
     polarityMismatch,
     knownA: a.known,

@@ -214,6 +214,7 @@ let teacherView = 'overview';
 let cartographerDocuments = [];
 let cartographerGlossary = [];
 let cartographerNonSimilarPairs = [];
+let cartographerSimilarityPairs = loadCartographerSimilarityPairs();
 let cartographerCoordinates = [];
 let cartographerSignature = '';
 let cartographerModel = null;
@@ -238,6 +239,25 @@ let selectedResultFileIds = new Set();
 let selectedStudentUsernames = new Set();
 let resultFileSelectionMenuOpen = false;
 let quizFileSelectionMenuOpen = false;
+const CARTOGRAPHER_SIMILARITY_PAIRS_KEY = 'cartographer-similarity-pairs';
+
+function loadCartographerSimilarityPairs() {
+  try {
+    const raw = localStorage.getItem(CARTOGRAPHER_SIMILARITY_PAIRS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter(item => item && typeof item === 'object') : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+function persistCartographerSimilarityPairs() {
+  localStorage.setItem(CARTOGRAPHER_SIMILARITY_PAIRS_KEY, JSON.stringify(cartographerSimilarityPairs));
+}
+
+function cartographerSimilarityCalibrationPairs() {
+  return cartographerSimilarityPairs;
+}
 let persistenceTimer = null;
 let liveRefreshTimer = null;
 let teacherDeadlineTimer = null;
@@ -749,6 +769,14 @@ function injectCartographerNonSimilarPairForm() {
   if (!glossaryPanel || document.querySelector('.cartographer-non-similar-panel')) return;
   glossaryPanel.insertAdjacentHTML('afterend', `<section class="card panel cartographer-non-similar-panel"><div class="panel-head"><div><h2>Negation rules</h2><p class="subtle">Map a negated word to its positive base form.</p></div></div><form id="cartographer-negation-rule-form"><div class="field"><label for="cartographer-negation-negative-form">Negated form</label><input id="cartographer-negation-negative-form" name="negativeForm" maxlength="80" placeholder="e.g. isn't" required /></div><div class="field"><label for="cartographer-negation-base-word">Base word</label><input id="cartographer-negation-base-word" name="baseWord" maxlength="80" placeholder="e.g. is" required /></div><button class="btn btn-secondary" type="submit" ${cartographerLoading ? 'disabled' : ''}>Save rule</button></form></section>`);
 }
+function injectCartographerSimilarityCalibrationPanel() {
+  const negationPanel = document.querySelector('.cartographer-non-similar-panel');
+  if (!negationPanel || document.querySelector('.cartographer-similarity-calibration-panel')) return;
+  const entries = cartographerSimilarityPairs.length
+    ? cartographerSimilarityPairs.map(pair => `<div class="cartographer-glossary-row"><span><strong>${esc(pair.word_a)}</strong><span aria-hidden="true"> ↔ </span>${esc(pair.word_b)}</span><span class="subtle">${Number(pair.similarity)}%</span><button class="cartographer-delete" data-action="cartographer-similarity-delete" data-id="${esc(pair.id || `${pair.word_a}:${pair.word_b}`)}" aria-label="Remove calibration pair ${esc(pair.word_a)} and ${esc(pair.word_b)}" title="Remove calibration pair">×</button></div>`).join('')
+    : '<div class="empty">No final-score calibration pairs saved.</div>';
+  negationPanel.insertAdjacentHTML('afterend', `<section class="card panel cartographer-similarity-calibration-panel"><div class="panel-head"><div><h2>Final score calibration</h2><p class="subtle">Used only for final-score calibration and does not retrain the corpus.</p></div></div><form id="cartographer-similarity-rule-form"><div class="field"><label for="cartographer-similarity-word-a">Word A</label><input id="cartographer-similarity-word-a" name="wordA" maxlength="40" placeholder="e.g. gemstone" required /></div><div class="field"><label for="cartographer-similarity-word-b">Word B</label><input id="cartographer-similarity-word-b" name="wordB" maxlength="40" placeholder="e.g. stone" required /></div><div class="field"><label for="cartographer-similarity-value">Similarity %</label><input id="cartographer-similarity-value" name="similarity" type="number" min="40" max="80" step="1" value="50" required /></div><button class="btn btn-secondary" type="submit" ${cartographerLoading ? 'disabled' : ''}>Save pair</button></form><div class="cartographer-glossary-list">${entries}</div></section>`);
+}
 function injectCartographerNonSimilarPairNotice() {
   if (!cartographerResult?.nonSimilarPairMatched) return;
   const score = document.querySelector('.cartographer-score');
@@ -811,6 +839,38 @@ async function saveCartographerNegationRule(inputNegativeForm, inputBaseWord) {
   await rebuildCartographerModel(true);
   cartographerResult = null;
   cartographerSelectedWord = '';
+}
+function saveCartographerSimilarityRule(inputWordA, inputWordB, inputSimilarity) {
+  const wordA = normalizeSemanticWord(inputWordA, cartographerGlossary);
+  const wordB = normalizeSemanticWord(inputWordB, cartographerGlossary);
+  const similarity = Number(inputSimilarity);
+  if (!wordA || !wordB) throw new Error('Enter one word in each field; phrases are not accepted for calibration pairs.');
+  if (wordA === wordB) throw new Error('Choose two different words for the calibration pair.');
+  if (!Number.isInteger(similarity) || similarity < 40 || similarity > 80) throw new Error('Similarity must be a whole number from 40% to 80%.');
+  if (cartographerNonSimilarPairs.some(pair => {
+    const left = normalizeSemanticWord(pair.word_a ?? pair.negative_form, cartographerGlossary);
+    const right = normalizeSemanticWord(pair.word_b ?? pair.base_word, cartographerGlossary);
+    return left && right && ((left === wordA && right === wordB) || (left === wordB && right === wordA));
+  })) throw new Error('That term pair conflicts with a saved negation or rejected rule and cannot be used for final-score calibration.');
+  if (cartographerSimilarityPairs.some(pair => {
+    const left = normalizeSemanticWord(pair.word_a, cartographerGlossary);
+    const right = normalizeSemanticWord(pair.word_b, cartographerGlossary);
+    return left && right && ((left === wordA && right === wordB) || (left === wordB && right === wordA));
+  })) throw new Error('That calibration pair already exists.');
+  cartographerSimilarityPairs.push({
+    id: `${wordA}:${wordB}:${similarity}`,
+    word_a: wordA,
+    word_b: wordB,
+    similarity
+  });
+  persistCartographerSimilarityPairs();
+}
+function deleteCartographerSimilarityPair(id) {
+  const previousLength = cartographerSimilarityPairs.length;
+  cartographerSimilarityPairs = cartographerSimilarityPairs.filter(pair => String(pair.id || `${pair.word_a}:${pair.word_b}`) !== String(id));
+  if (previousLength === cartographerSimilarityPairs.length) return;
+  persistCartographerSimilarityPairs();
+  app();
 }
 async function deleteCartographerGlossaryEntry(id) {
   try {
@@ -1699,6 +1759,7 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
   if (session?.role === 'teacher' && teacherView === 'cartographer') {
     injectCartographerGlossary();
     injectCartographerNonSimilarPairForm();
+    injectCartographerSimilarityCalibrationPanel();
     injectCartographerCoordinatePlane();
     injectCartographerNonSimilarPairNotice();
     updateCartographerUploadStatus();
@@ -1757,8 +1818,24 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
     if (compareForm) compareForm.addEventListener('submit', event => {
       event.preventDefault();
       const data = new FormData(compareForm);
-      cartographerResult = { textA: String(data.get('textA') || ''), textB: String(data.get('textB') || ''), ...compareSemanticText(cartographerModel, data.get('textA'), data.get('textB'), cartographerNegationRules(), cartographerLegacyNonSimilarPairs()) };
+      cartographerResult = { textA: String(data.get('textA') || ''), textB: String(data.get('textB') || ''), ...compareSemanticText(cartographerModel, data.get('textA'), data.get('textB'), cartographerNegationRules(), cartographerLegacyNonSimilarPairs(), cartographerSimilarityCalibrationPairs()) };
       app();
+    });
+    const similarityRuleForm = document.querySelector('#cartographer-similarity-rule-form');
+    if (similarityRuleForm) similarityRuleForm.addEventListener('submit', event => {
+      event.preventDefault();
+      const data = new FormData(similarityRuleForm);
+      const button = event.submitter;
+      if (button) button.disabled = true;
+      try {
+        saveCartographerSimilarityRule(data.get('wordA'), data.get('wordB'), data.get('similarity'));
+        similarityRuleForm.reset();
+        showToast('Final-score calibration pair saved. It affects final scoring only.');
+        app();
+      } catch (error) {
+        showToast(error.message || 'Calibration pair could not be saved.', 'error');
+        if (button) button.disabled = false;
+      }
     });
     const negationRuleForm = document.querySelector('#cartographer-negation-rule-form');
     if (negationRuleForm) negationRuleForm.addEventListener('submit', async event => {
@@ -1792,6 +1869,7 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
       }
     });
     document.querySelectorAll('[data-action="cartographer-glossary-delete"]').forEach(button => button.addEventListener('click', () => { void deleteCartographerGlossaryEntry(button.dataset.id); }));
+    document.querySelectorAll('[data-action="cartographer-similarity-delete"]').forEach(button => button.addEventListener('click', () => { deleteCartographerSimilarityPair(button.dataset.id); }));
     document.querySelector('[data-action="cartographer-train"]')?.addEventListener('click', async () => {
       try {
         await rebuildCartographerModel(true);

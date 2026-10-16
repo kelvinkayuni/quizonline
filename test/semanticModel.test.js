@@ -176,6 +176,31 @@ test('approved action roles add a conservative feature boost without replacing c
   assert.ok(result.score > 0);
 });
 
+test('teacher calibration pairs adjust final similarity in proportion to their sentence coverage', () => {
+  const model = {
+    glossary: new Map(),
+    vectors: new Map([
+      ['gemstone', new Map([['shared-context', 1]])],
+      ['bright', new Map([['shared-context', 1]])],
+      ['stone', new Map([['shared-context', 0.8], ['other-context', 0.6]])],
+      ['sparkling', new Map([['shared-context', 0.8], ['other-context', 0.6]])]
+    ])
+  };
+
+  const result = compareSemanticText(model, 'gemstone is bright', 'stone is sparkling', [], [], [{ word_a: 'gemstone', word_b: 'stone', similarity: 50 }]);
+  assert.equal(result.baseScore, 80);
+  assert.equal(result.calibrationCoverage, 50);
+  assert.equal(result.score, 65);
+});
+
+test('a calibration pair supplies the final score when it covers the whole comparison', () => {
+  const model = { glossary: new Map(), vectors: new Map() };
+  const result = compareSemanticText(model, 'gemstone', 'stone', [], [], [{ word_a: 'gemstone', word_b: 'stone', similarity: 50 }]);
+  assert.equal(result.baseScore, 0);
+  assert.equal(result.calibrationCoverage, 100);
+  assert.equal(result.score, 50);
+});
+
 test('ambiguous or structural terms do not generate action boosts', () => {
   const model = {
     glossary: new Map(),
