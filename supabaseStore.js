@@ -1,6 +1,7 @@
 import { supabase } from './supabase.js';
 import { roundToOneDecimal } from './shortAnswerMatching.js';
 import { ensureQuestionPersistenceId, getPublishedQuestionSnapshot, normalizeQuestionType } from './questionPersistence.js';
+import { getAttemptConflictReason } from './studentAttemptReconciliation.js';
 
 let persistenceEnabled = false;
 let syncQueue = Promise.resolve();
@@ -129,9 +130,13 @@ export async function persistStudentAttempt(studentSession) {
       saveError.code = 'claimed';
       throw saveError;
     }
-    if (data?.reason !== 'revision' || !isSafeAttemptExtension(attemptData, data.attempt_data)) {
+    const conflictReason = data?.reason === 'revision'
+      ? getAttemptConflictReason(attemptData, data.attempt_data)
+      : data?.reason || 'unknown_conflict';
+    if (data?.reason !== 'revision' || conflictReason) {
       const saveError = new Error('A newer progress version exists and cannot safely be merged. Keep this page open and sign in again to load the latest saved progress.');
       saveError.code = data?.reason || 'attempt_conflict';
+      saveError.conflictReason = conflictReason;
       if (data?.reason === 'revision' && data.attempt_data) {
         saveError.remoteAttempt = data.attempt_data;
         saveError.remoteRevision = Number(data.revision);
@@ -145,39 +150,23 @@ export async function persistStudentAttempt(studentSession) {
   throw saveError;
 }
 
-function isSafeAttemptExtension(localAttempt, remoteAttempt) {
-  if (!remoteAttempt
-    || JSON.stringify(localAttempt.questionOrderIds) !== JSON.stringify(remoteAttempt.questionOrderIds)
-    || localAttempt.deadlineAt !== remoteAttempt.deadlineAt
-    || Number(localAttempt.index) < Number(remoteAttempt.index)) return false;
-
-  const localAnswers = Array.isArray(localAttempt.answers) ? localAttempt.answers : [];
-  const remoteAnswers = Array.isArray(remoteAttempt.answers) ? remoteAttempt.answers : [];
-  if (remoteAnswers.length > localAnswers.length
-    || JSON.stringify(localAnswers.slice(0, remoteAnswers.length)) !== JSON.stringify(remoteAnswers)
-    || Number(localAttempt.index) - Number(remoteAttempt.index) > localAnswers.length - remoteAnswers.length) return false;
-
-  if (Number(localAttempt.index) === Number(remoteAttempt.index)) {
-    if (remoteAttempt.selected != null && localAttempt.selected !== remoteAttempt.selected) return false;
-    if (remoteAttempt.response && !String(localAttempt.response || '').startsWith(remoteAttempt.response)) return false;
-    if (remoteAttempt.feedback
-      && JSON.stringify(localAttempt.feedback) !== JSON.stringify(remoteAttempt.feedback)) return false;
-  }
-  return true;
-}
-
 export function reconcileStudentAttempt(localSession, remoteAttempt) {
   const localAttempt = attemptDataFromSession(localSession);
   if (!remoteAttempt?.started || !localAttempt.started) {
-    return { attempt: remoteAttempt?.started ? remoteAttempt : localAttempt, conflict: false };
+    return { attempt: remoteAttempt?.started ? remoteAttempt : localAttempt, conflict: false, reason: null };
   }
-  if (!localSession.attemptRequiresRemoteRestore && isSafeAttemptExtension(localAttempt, remoteAttempt)) {
-    return { attempt: localAttempt, conflict: false };
+  const localConflictReason = getAttemptConflictReason(localAttempt, remoteAttempt);
+  if (!localSession.attemptRequiresRemoteRestore && !localConflictReason) {
+    return { attempt: localAttempt, conflict: false, reason: null };
   }
-  if (isSafeAttemptExtension(remoteAttempt, localAttempt)) {
-    return { attempt: remoteAttempt, conflict: false };
+  if (!getAttemptConflictReason(remoteAttempt, localAttempt)) {
+    return { attempt: remoteAttempt, conflict: false, reason: null };
   }
-  return { attempt: remoteAttempt, conflict: true };
+  return {
+    attempt: remoteAttempt,
+    conflict: true,
+    reason: localSession.attemptRequiresRemoteRestore ? 'local_restore_required' : localConflictReason || 'unknown_conflict'
+  };
 }
 
 export async function deleteStudentAttempt(studentSession) {

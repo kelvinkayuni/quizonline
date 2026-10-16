@@ -1991,7 +1991,20 @@ async function handleLogin(event) {
         attemptRequiresRemoteRestore: false
       };
       if (reconciliation.conflict) {
-        showToast('The local and Supabase progress could not be safely merged. The latest Supabase-saved progress was restored; conflicting local changes were not applied.', 'error');
+        const conflictDescriptions = {
+          question_order_mismatch: 'the question order differs',
+          deadline_mismatch: 'the quiz deadlines differ',
+          local_progress_behind: 'local progress is behind the saved attempt',
+          remote_has_more_answers: 'the saved attempt has more answers',
+          answer_history_mismatch: 'the saved answer history differs',
+          progress_gap: 'the question index does not match the saved answers',
+          selection_mismatch: 'the selected answer differs',
+          response_mismatch: 'the typed response differs',
+          feedback_mismatch: 'the saved feedback differs',
+          local_restore_required: 'this device was already marked to restore server progress'
+        };
+        const reason = conflictDescriptions[reconciliation.reason] || 'the progress versions do not match';
+        showToast(`Progress conflict: ${reason}. The latest Supabase-saved attempt was restored; conflicting local changes were not applied.`, 'error');
       }
     } catch (error) {
       showToast(`Your saved quiz progress could not be loaded from Supabase: ${error.message || error}`, 'error');
