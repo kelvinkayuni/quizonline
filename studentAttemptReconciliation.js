@@ -1,3 +1,9 @@
+function stableJsonValue(value) {
+  if (Array.isArray(value)) return value.map(stableJsonValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.keys(value).sort().map(key => [key, stableJsonValue(value[key])]));
+}
+
 export function getAttemptConflictReason(localAttempt, remoteAttempt) {
   if (!remoteAttempt) return 'remote_attempt_missing';
   if (JSON.stringify(localAttempt.questionOrderIds) !== JSON.stringify(remoteAttempt.questionOrderIds)) return 'question_order_mismatch';
@@ -10,7 +16,7 @@ export function getAttemptConflictReason(localAttempt, remoteAttempt) {
   const localAnswers = Array.isArray(localAttempt.answers) ? localAttempt.answers : [];
   const remoteAnswers = Array.isArray(remoteAttempt.answers) ? remoteAttempt.answers : [];
   if (remoteAnswers.length > localAnswers.length) return 'remote_has_more_answers';
-  if (JSON.stringify(localAnswers.slice(0, remoteAnswers.length)) !== JSON.stringify(remoteAnswers)) return 'answer_history_mismatch';
+  if (JSON.stringify(stableJsonValue(localAnswers.slice(0, remoteAnswers.length))) !== JSON.stringify(stableJsonValue(remoteAnswers))) return 'answer_history_mismatch';
   if (localIndex - remoteIndex > localAnswers.length - remoteAnswers.length) return 'progress_gap';
 
   if (localIndex === remoteIndex) {

@@ -28,6 +28,19 @@ test('reconciliation identifies progress and answer-history mismatches', () => {
   assert.equal(getAttemptConflictReason({ ...matchingAttempt, index: 2 }, matchingAttempt), 'progress_gap');
 });
 
+test('answer history ignores object key order but preserves values and array order', () => {
+  const localAnswer = { questionId: 'q1', selected: 0, correct: true, partial: false, marksAwarded: 2 };
+  const reorderedAnswer = { marksAwarded: 2, partial: false, correct: true, selected: 0, questionId: 'q1' };
+  assert.equal(getAttemptConflictReason({ ...matchingAttempt, answers: [localAnswer] }, { ...matchingAttempt, answers: [reorderedAnswer] }), null);
+  assert.equal(getAttemptConflictReason({ ...matchingAttempt, answers: [localAnswer] }, { ...matchingAttempt, answers: [{ ...reorderedAnswer, selected: 1 }] }), 'answer_history_mismatch');
+
+  const secondAnswer = { questionId: 'q2', selected: 1, correct: false };
+  assert.equal(getAttemptConflictReason(
+    { ...matchingAttempt, index: 2, answers: [localAnswer, secondAnswer] },
+    { ...matchingAttempt, index: 2, answers: [secondAnswer, localAnswer] }
+  ), 'answer_history_mismatch');
+});
+
 test('reconciliation identifies current answer and feedback mismatches without exposing answer text', () => {
   assert.equal(getAttemptConflictReason({ ...matchingAttempt, selected: 1 }, { ...matchingAttempt, selected: 0 }), 'selection_mismatch');
   assert.equal(getAttemptConflictReason({ ...matchingAttempt, response: 'different text' }, { ...matchingAttempt, response: 'saved text' }), 'response_mismatch');
