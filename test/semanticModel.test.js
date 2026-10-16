@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { compareSemanticText, createSemanticMap, normalizeCorpusText, normalizeSemanticWord, tokenizeSemanticText, trainSemanticModel } from '../semanticModel.js';
+import { areSemanticWordPairsEqual, compareSemanticText, createSemanticMap, isGlossaryVariantCanonicalPair, normalizeCorpusText, normalizeSemanticWord, tokenizeSemanticText, trainSemanticModel } from '../semanticModel.js';
 
 test('semantic tokenization keeps negation and selected short terms but drops stopwords', () => {
   assert.deepEqual(
@@ -140,6 +140,15 @@ test('teacher glossary aliases map variants to a canonical term', () => {
   ]);
   assert.equal(model.frequencies.get('jewelry'), 2);
   assert.equal(model.frequencies.has('jewellery'), false);
+});
+
+test('glossary alias and canonical pairs are detected in either word order', () => {
+  const glossary = [{ alias: 'jewellery', canonical_term: 'jewelry' }];
+  assert.equal(isGlossaryVariantCanonicalPair(glossary, 'jewellery', 'jewelry'), true);
+  assert.equal(isGlossaryVariantCanonicalPair(glossary, 'jewelry', 'jewellery'), true);
+  assert.equal(isGlossaryVariantCanonicalPair(glossary, 'jewelry', 'ornament'), false);
+  assert.equal(areSemanticWordPairsEqual('Jewellery', 'Jewelry', 'jewelry', 'jewellery'), true);
+  assert.equal(areSemanticWordPairsEqual('jewelry', 'ornament', 'jewelry', 'jewellery'), false);
 });
 
 test('identical normalized passages are counted once across documents', () => {

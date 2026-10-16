@@ -2,7 +2,7 @@ function courseDisplayValue(value) { const normalized = String(value || '').trim
 function studentCourseDetails() { const courseName = courseDisplayValue(state.config.courseName); const courseCode = courseDisplayValue(state.config.courseCode); return courseName || courseCode ? `<div class="course-banner">${courseName ? `<strong>${esc(courseName)}</strong>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''; }
 import { supabase } from './supabase.js';
 import { extractCartographerFile, insertCartographerDocument, insertCartographerGlossaryEntry, insertCartographerNonSimilarPair, listCartographerCoordinates, listCartographerDocuments, listCartographerGlossary, listCartographerNonSimilarPairs, removeCartographerDocument, removeCartographerGlossaryEntry, saveCartographerCoordinates } from './semanticCorpus.js';
-import { compareSemanticText, createSemanticMap, normalizeCorpusText, normalizeSemanticWord, tokenizeSemanticText, trainSemanticModel } from './semanticModel.js';
+import { areSemanticWordPairsEqual, compareSemanticText, createSemanticMap, isGlossaryVariantCanonicalPair, normalizeCorpusText, normalizeSemanticWord, tokenizeSemanticText, trainSemanticModel } from './semanticModel.js';
 import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, deleteTeacherQuizQuestionHistory, hydrateQuizState, listTeacherQuizQuestionHistory, loadStudentQuizReport, loadStudentQuizResult, loadTeacherQuizQuestionHistory, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizConfiguration, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAccessChange, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt, waitForPendingQuestionSaves } from './supabaseStore.js';
 import { loadStudentPresence, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { SHORT_ANSWER_FULL_CREDIT_THRESHOLD, roundToOneDecimal, shortAnswerMarksAwarded, shortAnswerMatchScore } from './shortAnswerMatching.js';
@@ -211,6 +211,8 @@ if (!Array.isArray(state.deactivatedStudentUsernames)) state.deactivatedStudentU
 if (typeof state.configSaved !== 'boolean') state.configSaved = false;
 if (!state.importedFile) { state.users = []; saveState(); }
 let teacherView = 'overview';
+const CARTOGRAPHER_SIMILARITY_PAIRS_KEY = 'cartographer-similarity-pairs';
+const CARTOGRAPHER_SIMILARITY_SCROLL_KEY = 'cartographer-similarity-pairs-scroll';
 let cartographerDocuments = [];
 let cartographerGlossary = [];
 let cartographerNonSimilarPairs = [];
@@ -239,7 +241,6 @@ let selectedResultFileIds = new Set();
 let selectedStudentUsernames = new Set();
 let resultFileSelectionMenuOpen = false;
 let quizFileSelectionMenuOpen = false;
-const CARTOGRAPHER_SIMILARITY_PAIRS_KEY = 'cartographer-similarity-pairs';
 
 function loadCartographerSimilarityPairs() {
   try {
@@ -775,7 +776,22 @@ function injectCartographerSimilarityCalibrationPanel() {
   const entries = cartographerSimilarityPairs.length
     ? cartographerSimilarityPairs.map(pair => `<div class="cartographer-glossary-row"><span><strong>${esc(pair.word_a)}</strong><span aria-hidden="true"> ↔ </span>${esc(pair.word_b)}</span><span class="subtle">${Number(pair.similarity)}%</span><button class="cartographer-delete" data-action="cartographer-similarity-delete" data-id="${esc(pair.id || `${pair.word_a}:${pair.word_b}`)}" aria-label="Remove calibration pair ${esc(pair.word_a)} and ${esc(pair.word_b)}" title="Remove calibration pair">×</button></div>`).join('')
     : '<div class="empty">No final-score calibration pairs saved.</div>';
-  negationPanel.insertAdjacentHTML('afterend', `<section class="card panel cartographer-similarity-calibration-panel"><div class="panel-head"><div><h2>Final score calibration</h2><p class="subtle">Used only for final-score calibration and does not retrain the corpus.</p></div></div><form id="cartographer-similarity-rule-form"><div class="field"><label for="cartographer-similarity-word-a">Word A</label><input id="cartographer-similarity-word-a" name="wordA" maxlength="40" placeholder="e.g. gemstone" required /></div><div class="field"><label for="cartographer-similarity-word-b">Word B</label><input id="cartographer-similarity-word-b" name="wordB" maxlength="40" placeholder="e.g. stone" required /></div><div class="field"><label for="cartographer-similarity-value">Similarity %</label><input id="cartographer-similarity-value" name="similarity" type="number" min="40" max="80" step="1" value="50" required /></div><button class="btn btn-secondary" type="submit" ${cartographerLoading ? 'disabled' : ''}>Save pair</button></form><div class="cartographer-glossary-list">${entries}</div></section>`);
+  negationPanel.insertAdjacentHTML('afterend', `<section class="card panel cartographer-similarity-calibration-panel"><div class="panel-head"><div><h2>Final score calibration</h2><p class="subtle">Used only for final-score calibration and does not retrain the corpus.</p></div></div><form id="cartographer-similarity-rule-form"><div class="field"><label for="cartographer-similarity-word-a">Word A</label><input id="cartographer-similarity-word-a" name="wordA" maxlength="40" placeholder="e.g. gemstone" required /></div><div class="field"><label for="cartographer-similarity-word-b">Word B</label><input id="cartographer-similarity-word-b" name="wordB" maxlength="40" placeholder="e.g. stone" required /></div><div class="field"><label for="cartographer-similarity-value">Similarity %</label><input id="cartographer-similarity-value" name="similarity" type="number" min="40" max="80" step="1" value="50" required /></div><button class="btn btn-secondary" type="submit" ${cartographerLoading ? 'disabled' : ''}>Save pair</button></form><div id="cartographer-similarity-pair-list" class="cartographer-glossary-list cartographer-similarity-pair-list">${entries}</div></section>`);
+  const pairList = document.querySelector('#cartographer-similarity-pair-list');
+  if (pairList) {
+    try {
+      pairList.scrollTop = Number(localStorage.getItem(CARTOGRAPHER_SIMILARITY_SCROLL_KEY)) || 0;
+    } catch (error) {
+      pairList.scrollTop = 0;
+    }
+    pairList.addEventListener('scroll', () => {
+      try {
+        localStorage.setItem(CARTOGRAPHER_SIMILARITY_SCROLL_KEY, String(pairList.scrollTop));
+      } catch (error) {
+        return;
+      }
+    }, { passive: true });
+  }
 }
 function injectCartographerNonSimilarPairNotice() {
   if (!cartographerResult?.nonSimilarPairMatched) return;
@@ -819,6 +835,7 @@ async function saveCartographerGlossaryEntry(alias, canonicalTerm) {
   if (aliasCanonical === targetCanonical) throw new Error('The variant and canonical word already normalize to the same term.');
   if (cartographerGlossary.some(entry => tokenizeSemanticText(entry.alias)[0] === aliasCanonical)) throw new Error('That word variant already has a glossary entry.');
   if (cartographerGlossary.some(entry => tokenizeSemanticText(entry.canonical_term)[0] === aliasCanonical || tokenizeSemanticText(entry.alias)[0] === targetCanonical)) throw new Error('Aliases must point directly to a canonical word, not another alias.');
+  if (cartographerSimilarityPairs.some(pair => areSemanticWordPairsEqual(aliasCanonical, targetCanonical, pair.word_a, pair.word_b))) throw new Error('That variant and canonical word already exist as a final-score calibration pair. Remove the calibration pair before adding this alias.');
   const entry = await insertCartographerGlossaryEntry({ alias: aliasTerm, canonical_term: canonicalWord });
   cartographerGlossary.push(entry);
   await rebuildCartographerModel(true);
@@ -841,6 +858,9 @@ async function saveCartographerNegationRule(inputNegativeForm, inputBaseWord) {
   cartographerSelectedWord = '';
 }
 function saveCartographerSimilarityRule(inputWordA, inputWordB, inputSimilarity) {
+  const rawWordA = normalizeSemanticWord(inputWordA);
+  const rawWordB = normalizeSemanticWord(inputWordB);
+  if (isGlossaryVariantCanonicalPair(cartographerGlossary, rawWordA, rawWordB)) throw new Error('That variant and canonical word already exist as a word alias. Remove the alias before adding this calibration pair.');
   const wordA = normalizeSemanticWord(inputWordA, cartographerGlossary);
   const wordB = normalizeSemanticWord(inputWordB, cartographerGlossary);
   const similarity = Number(inputSimilarity);

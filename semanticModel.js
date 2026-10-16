@@ -45,6 +45,20 @@ export function normalizeSemanticWord(word, glossary = []) {
   return canonicalTerm(surface, createGlossaryMap(glossary));
 }
 
+export function areSemanticWordPairsEqual(wordA, wordB, otherA, otherB) {
+  const normalizedA = normalizeSemanticWord(wordA);
+  const normalizedB = normalizeSemanticWord(wordB);
+  const normalizedOtherA = normalizeSemanticWord(otherA);
+  const normalizedOtherB = normalizeSemanticWord(otherB);
+  if (!normalizedA || !normalizedB || !normalizedOtherA || !normalizedOtherB) return false;
+  return (normalizedA === normalizedOtherA && normalizedB === normalizedOtherB)
+    || (normalizedA === normalizedOtherB && normalizedB === normalizedOtherA);
+}
+
+export function isGlossaryVariantCanonicalPair(glossary, wordA, wordB) {
+  return (glossary || []).some(entry => areSemanticWordPairsEqual(wordA, wordB, entry.alias, entry.canonical_term));
+}
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
