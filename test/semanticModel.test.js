@@ -59,6 +59,27 @@ test('negation scopes across clauses while noun negation stays local and double 
   assert.equal(compareSemanticText(model, 'quartz', 'not, quartz').score, 100);
 });
 
+test('contrastive boundaries reset negation without splitting additive or temporal phrases', () => {
+  const model = {
+    glossary: new Map(),
+    vectors: new Map([
+      ['alpha', new Map([['alpha-context', 1]])],
+      ['beta', new Map([['beta-context', 1]])],
+      ['gamma', new Map([['gamma-context', 1]])],
+      ['wet', new Map([['wet-context', 1]])]
+    ])
+  };
+  const compareWithGamma = text => compareSemanticText(model, text, 'gamma').score;
+
+  assert.ok(compareWithGamma('not alpha but gamma') > 0);
+  assert.ok(compareWithGamma('not alpha although gamma') > 0);
+  assert.ok(compareWithGamma('not alpha while beta is gamma') > 0);
+  assert.ok(compareWithGamma('not alpha. gamma') > 0);
+  assert.equal(compareWithGamma('not only alpha but also gamma'), compareWithGamma('alpha gamma'));
+  assert.equal(compareSemanticText(model, 'not alpha while wet', 'wet').score, 0);
+  assert.equal(compareWithGamma('not alpha whenever gamma'), 0);
+});
+
 test('corpus context gives related terms closer vectors than unrelated terms', () => {
   const model = trainSemanticModel([{ text_content: 'Diamond is hard. Sapphire is hard. Diamond resists scratching. Sapphire resists abrasion. River water flows. River water floods.' }]);
   const related = compareSemanticText(model, 'diamond', 'sapphire');

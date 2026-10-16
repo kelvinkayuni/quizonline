@@ -146,9 +146,16 @@ function addCooccurrence(matrix, word, context, weight) {
   row.set(context, (row.get(context) || 0) + weight);
 }
 
+function splitNegationPassages(text) {
+  const withoutAdditiveNegation = String(text || '')
+    .replace(/\bnot\s+only\b/giu, ' ')
+    .replace(/\bbut\s+also\b/giu, ' ');
+  return withoutAdditiveNegation.split(/(?:[.!?;,\n]+|\s+[-*]\s+|\s+\bbut\b\s+|\s+\balthough\b\s+|\s+\bwhile(?=\s+(?:[\p{L}\p{M}'’ʼ-]+\s+){0,2}(?:am|is|are|was|were|be|been|being|has|have|had|does|do|did|can|could|may|might|will|would|must|contain|contains|form|forms|remain|remains|occur|occurs|increase|increases|decrease|decreases|rise|rises|rose|fall|falls|fell|change|changes|changed|show|shows|indicate|indicates)\b)\s+)/iu);
+}
+
 function vectorForText(model, text, negationRules) {
   const expandedText = expandNegationRules(text, negationRules, model?.glossary);
-  const passages = expandedText.split(/(?:[.!?;,\n]+|\s+[-*]\s+)/)
+  const passages = splitNegationPassages(expandedText)
     .map(passage => tokenizeSemanticText(passage, model?.glossary));
   const tokens = passages.flat();
   const vector = new Map();
