@@ -222,6 +222,41 @@ function comparisonContainsWord(text, word, glossary) {
   return words.some(candidate => normalizeSemanticWord(candidate, glossary) === word);
 }
 
+function sentencePolarityEvidence(text, glossary, negationRules = []) {
+  const expandedText = expandNegationRules(text, negationRules, glossary);
+  const evidence = new Map();
+  for (const passage of splitNegationPassages(expandedText).filter(Boolean)) {
+    const tokens = tokenizeSemanticText(passage, glossary);
+    let clausePolarity = 1;
+    const locallyNegatedIndexes = new Set();
+    for (let index = 0; index < tokens.length; index++) {
+      const token = tokens[index];
+      if (NEGATION_TERMS.has(token)) {
+        if (LOCAL_NEGATION_TERMS.has(token)) {
+          if (index + 1 < tokens.length) locallyNegatedIndexes.add(index + 1);
+        } else {
+          clausePolarity *= -1;
+        }
+        continue;
+      }
+      const polarity = clausePolarity * (locallyNegatedIndexes.has(index) ? -1 : 1);
+      evidence.set(token, (evidence.get(token) || 0) + polarity);
+    }
+  }
+  return evidence;
+}
+
+function sentencePolarityMismatch(textA, textB, glossary, negationRules = []) {
+  const evidenceA = sentencePolarityEvidence(textA, glossary, negationRules);
+  const evidenceB = sentencePolarityEvidence(textB, glossary, negationRules);
+  const sharedTerms = [...evidenceA.keys()].filter(term => evidenceB.has(term));
+  return sharedTerms.some(term => {
+    const signA = evidenceA.get(term) || 0;
+    const signB = evidenceB.get(term) || 0;
+    return (signA > 0 && signB < 0) || (signA < 0 && signB > 0);
+  });
+}
+
 function cosineSimilarity(vectorA, vectorB) {
   let dot = 0;
   let normA = 0;
@@ -244,6 +279,7 @@ export function compareSemanticText(model, textA, textB, negationRules = [], leg
       || (comparisonContainsWord(textA, wordB, model?.glossary) && comparisonContainsWord(textB, wordA, model?.glossary))
     );
   });
+  const polarityMismatch = sentencePolarityMismatch(textA, textB, model?.glossary, negationRules);
   const baseScore = cosineSimilarity(a.vector, b.vector);
   const actionRoleBoost = (() => {
     const vectorA = actionRoleVectorForText(textA, model?.glossary);
@@ -258,8 +294,8 @@ export function compareSemanticText(model, textA, textB, negationRules = [], leg
     }
     return cosineSimilarity(paddedA, paddedB);
   })();
-  const blendedScore = nonSimilarPairMatched ? 0 : Math.max(0, Math.min(1, baseScore * 0.85 + actionRoleBoost * 0.15));
-  const finalScore = nonSimilarPairMatched ? 0 : Math.max(baseScore, blendedScore);
+  const blendedScore = (nonSimilarPairMatched || polarityMismatch) ? 0 : Math.max(0, Math.min(1, baseScore * 0.85 + actionRoleBoost * 0.15));
+  const finalScore = (nonSimilarPairMatched || polarityMismatch) ? 0 : Math.max(baseScore, blendedScore);
   const coverageCount = a.known + b.known;
   const totalCount = a.total + b.total;
   return {
@@ -267,6 +303,7 @@ export function compareSemanticText(model, textA, textB, negationRules = [], leg
     baseScore: Math.round(baseScore * 100),
     roleBoost: actionRoleBoost,
     nonSimilarPairMatched,
+    polarityMismatch,
     knownA: a.known,
     knownB: b.known,
     coverage: totalCount ? Math.round((coverageCount / totalCount) * 100) : 0

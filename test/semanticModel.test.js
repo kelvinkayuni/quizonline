@@ -80,6 +80,16 @@ test('contrastive boundaries reset negation without splitting additive or tempor
   assert.equal(compareWithGamma('not alpha whenever gamma'), 0);
 });
 
+test('longer sentences with a negated safety claim are treated as contradictory, not similar', () => {
+  const model = trainSemanticModel([{ text_content: 'The mineral is safe for handling in the lab and remains stable under normal conditions. The mineral is not safe for handling in the lab and is not stable under normal conditions.' }]);
+  const result = compareSemanticText(
+    model,
+    'The mineral is safe for handling in the lab and remains stable under normal conditions.',
+    'The mineral is not safe for handling in the lab and is not stable under normal conditions.'
+  );
+  assert.equal(result.score, 0);
+});
+
 test('corpus context gives related terms closer vectors than unrelated terms', () => {
   const model = trainSemanticModel([{ text_content: 'Diamond is hard. Sapphire is hard. Diamond resists scratching. Sapphire resists abrasion. River water flows. River water floods.' }]);
   const related = compareSemanticText(model, 'diamond', 'sapphire');
