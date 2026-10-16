@@ -2,6 +2,7 @@ import pluralize from 'pluralize';
 
 const STOPWORDS = new Set('a an and are as at be been but by for from had has have he her hers him his i if in into is it its of on or our she that the their them then there these they this those to was we were what when where which who will with would you your'.split(' '));
 const NEGATION_TERMS = new Set(['no', 'not', 'never', 'without']);
+const LOCAL_NEGATION_TERMS = new Set(['no', 'without']);
 const SHORT_TERM_ALLOWLIST = new Set(['ai']);
 
 function normalizedSurfaceForm(word) {
@@ -147,28 +148,33 @@ function addCooccurrence(matrix, word, context, weight) {
 
 function vectorForText(model, text, negationRules) {
   const expandedText = expandNegationRules(text, negationRules, model?.glossary);
-  const passages = expandedText.split(/(?:[.!?;\n]+|\s+[-*]\s+)/)
+  const passages = expandedText.split(/(?:[.!?;,\n]+|\s+[-*]\s+)/)
     .map(passage => tokenizeSemanticText(passage, model?.glossary));
   const tokens = passages.flat();
   const vector = new Map();
   const known = new Set();
   for (const passage of passages) {
-    let negateNextToken = false;
-    for (const token of passage) {
+    let clausePolarity = 1;
+    const locallyNegatedIndexes = new Set();
+    for (let index = 0; index < passage.length; index++) {
+      const token = passage[index];
       if (NEGATION_TERMS.has(token)) {
         known.add(token);
-        negateNextToken = true;
+        if (LOCAL_NEGATION_TERMS.has(token)) {
+          if (index + 1 < passage.length) locallyNegatedIndexes.add(index + 1);
+        } else {
+          clausePolarity *= -1;
+        }
         continue;
       }
       const source = model?.vectors.get(token);
       if (source) {
         known.add(token);
-        const polarity = negateNextToken ? -1 : 1;
+        const polarity = clausePolarity * (locallyNegatedIndexes.has(index) ? -1 : 1);
         for (const [context, value] of source) {
           vector.set(context, (vector.get(context) || 0) + polarity * value / Math.max(1, tokens.length));
         }
       }
-      negateNextToken = false;
     }
   }
   return { vector, known: known.size, total: new Set(tokens).size };

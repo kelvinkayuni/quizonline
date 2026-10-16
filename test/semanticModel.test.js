@@ -50,6 +50,15 @@ test('negation reverses the next term in a semantic comparison', () => {
   assert.equal(negated.knownB, 2);
 });
 
+test('negation scopes across clauses while noun negation stays local and double negation cancels', () => {
+  const model = trainSemanticModel([{ text_content: 'Quartz is present in samples. Samples contain quartz. Quartz is absent from samples.' }]);
+  assert.equal(compareSemanticText(model, 'quartz', 'not contain quartz').score, 0);
+  assert.equal(compareSemanticText(model, 'quartz', 'no quartz').score, 0);
+  assert.equal(compareSemanticText(model, 'quartz', 'without quartz').score, 0);
+  assert.equal(compareSemanticText(model, 'quartz', 'not without quartz').score, 100);
+  assert.equal(compareSemanticText(model, 'quartz', 'not, quartz').score, 100);
+});
+
 test('corpus context gives related terms closer vectors than unrelated terms', () => {
   const model = trainSemanticModel([{ text_content: 'Diamond is hard. Sapphire is hard. Diamond resists scratching. Sapphire resists abrasion. River water flows. River water floods.' }]);
   const related = compareSemanticText(model, 'diamond', 'sapphire');
