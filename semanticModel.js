@@ -4,6 +4,16 @@ const STOPWORDS = new Set('a an and are as at be been but by for from had has ha
 const NEGATION_TERMS = new Set(['no', 'not', 'never', 'without']);
 const LOCAL_NEGATION_TERMS = new Set(['no', 'without']);
 const SHORT_TERM_ALLOWLIST = new Set(['ai']);
+const APPROVED_ACTION_ROLE_FAMILIES = {
+  measurement: new Set(['measure', 'weigh', 'calibrate', 'compare', 'detect', 'determine', 'estimate', 'examine', 'focus', 'identify', 'judge', 'observe']),
+  opticalProcess: new Set(['absorb', 'emit', 'enter', 'emerge', 'pass', 'polarize', 'refract', 'reflect', 'transmit', 'vibrate', 'rotate', 'illuminate', 'disperse']),
+  materialProcessing: new Set(['carve', 'compose', 'create', 'cut', 'drill', 'dye', 'fill', 'form', 'grow', 'heat', 'mine', 'process', 'produce', 'shape', 'treat', 'yield', 'polish', 'saturate']),
+  causalChange: new Set(['affect', 'allow', 'become', 'cause', 'change', 'consist', 'contain', 'contribute', 'depend', 'develop', 'enhance', 'increase', 'lead', 'occur', 'prevent', 'protect', 'reduce', 'vary', 'improve']),
+  evidenceDescription: new Set(['associate', 'describe', 'display', 'explain', 'include', 'indicate', 'relate', 'report', 'represent', 'resemble', 'reveal', 'show', 'suggest', 'support', 'mean']),
+  transactionUsage: new Set(['adjust', 'apply', 'buy', 'find', 'follow', 'get', 'give', 'help', 'learn', 'leave', 'look', 'make', 'need', 'offer', 'place', 'provide', 'require', 'sell', 'take', 'use'])
+};
+const APPROVED_ACTION_LEMMAS = new Set(Object.values(APPROVED_ACTION_ROLE_FAMILIES).flatMap(set => [...set]));
+const DISALLOWED_ACTION_LEMMAS = new Set(['be', 'have', 'gemstone', 'jadeite', 'tanzanite']);
 
 function normalizedSurfaceForm(word) {
   return word.normalize('NFKC')
@@ -187,6 +197,26 @@ function vectorForText(model, text, negationRules) {
   return { vector, known: known.size, total: new Set(tokens).size };
 }
 
+function actionRoleFamilyForToken(token) {
+  const normalized = normalizeSemanticWord(token, []);
+  if (!normalized || DISALLOWED_ACTION_LEMMAS.has(normalized)) return null;
+  for (const [family, actions] of Object.entries(APPROVED_ACTION_ROLE_FAMILIES)) {
+    if (actions.has(normalized)) return family;
+  }
+  return null;
+}
+
+function actionRoleVectorForText(text, glossary) {
+  const tokens = tokenizeSemanticText(text, glossary);
+  const vector = new Map();
+  for (const token of tokens) {
+    const family = actionRoleFamilyForToken(token);
+    if (!family) continue;
+    vector.set(family, (vector.get(family) || 0) + 1);
+  }
+  return vector;
+}
+
 function comparisonContainsWord(text, word, glossary) {
   const words = String(text || '').normalize('NFKC').match(/[\p{L}][\p{L}\p{M}'’ʼ\-‐‑‒–—−]*/gu) || [];
   return words.some(candidate => normalizeSemanticWord(candidate, glossary) === word);
@@ -214,10 +244,28 @@ export function compareSemanticText(model, textA, textB, negationRules = [], leg
       || (comparisonContainsWord(textA, wordB, model?.glossary) && comparisonContainsWord(textB, wordA, model?.glossary))
     );
   });
+  const baseScore = cosineSimilarity(a.vector, b.vector);
+  const actionRoleBoost = (() => {
+    const vectorA = actionRoleVectorForText(textA, model?.glossary);
+    const vectorB = actionRoleVectorForText(textB, model?.glossary);
+    if (!vectorA.size || !vectorB.size) return 0;
+    const mergedKeys = new Set([...vectorA.keys(), ...vectorB.keys()]);
+    const paddedA = new Map();
+    const paddedB = new Map();
+    for (const key of mergedKeys) {
+      paddedA.set(key, vectorA.get(key) || 0);
+      paddedB.set(key, vectorB.get(key) || 0);
+    }
+    return cosineSimilarity(paddedA, paddedB);
+  })();
+  const blendedScore = nonSimilarPairMatched ? 0 : Math.max(0, Math.min(1, baseScore * 0.85 + actionRoleBoost * 0.15));
+  const finalScore = nonSimilarPairMatched ? 0 : Math.max(baseScore, blendedScore);
   const coverageCount = a.known + b.known;
   const totalCount = a.total + b.total;
   return {
-    score: nonSimilarPairMatched ? 0 : Math.round(cosineSimilarity(a.vector, b.vector) * 100),
+    score: Math.round(finalScore * 100),
+    baseScore: Math.round(baseScore * 100),
+    roleBoost: actionRoleBoost,
     nonSimilarPairMatched,
     knownA: a.known,
     knownB: b.known,

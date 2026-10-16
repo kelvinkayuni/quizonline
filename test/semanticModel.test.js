@@ -145,3 +145,38 @@ test('identical normalized passages are counted once across documents', () => {
 test('document duplicate normalization ignores case, Unicode dash variants, and spacing', () => {
   assert.equal(normalizeCorpusText('Long–term   GEMSTONES'), normalizeCorpusText('long-term gemstones'));
 });
+
+test('approved action roles add a conservative feature boost without replacing cosine', () => {
+  const model = {
+    glossary: new Map(),
+    vectors: new Map([
+      ['measure', new Map([['measure-context', 1]])],
+      ['weigh', new Map([['weigh-context', 1]])],
+      ['gemstone', new Map([['gemstone-context', 1]])],
+      ['reflect', new Map([['reflect-context', 1]])],
+      ['refract', new Map([['refract-context', 1]])]
+    ])
+  };
+
+  const result = compareSemanticText(model, 'measure gemstone', 'weigh gemstone');
+  assert.ok(result.baseScore >= 0);
+  assert.equal(typeof result.roleBoost, 'number');
+  assert.ok(result.roleBoost > 0.2);
+  assert.ok(result.score >= result.baseScore);
+  assert.ok(result.score > 0);
+});
+
+test('ambiguous or structural terms do not generate action boosts', () => {
+  const model = {
+    glossary: new Map(),
+    vectors: new Map([
+      ['color', new Map([['color-context', 1]])],
+      ['colour', new Map([['colour-context', 1]])],
+      ['be', new Map([['be-context', 1]])]
+    ])
+  };
+
+  const result = compareSemanticText(model, 'color', 'colour');
+  assert.equal(result.roleBoost, 0);
+  assert.equal(result.score, 0);
+});
