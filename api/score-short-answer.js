@@ -101,12 +101,17 @@ export default async function handler(req, res) {
 
   try {
     const client = createServerClient();
-    const [teacher, config, workspace, attempt] = await Promise.all([
+    const config = await queryResult(client.from('quiz_config')
+      .select('quiz_id, published, stopped, end_time')
+      .eq('id', 1)
+      .maybeSingle());
+    if (!config?.published || config.stopped || config.quiz_id !== quizId
+      || (config.end_time && Date.parse(config.end_time) < Date.now())) {
+      return res.status(409).json({ error: 'This quiz is no longer active.' });
+    }
+
+    const [teacher, workspace, attempt] = await Promise.all([
       loadTeacher(client),
-      queryResult(client.from('quiz_config')
-        .select('quiz_id, published, stopped, end_time')
-        .eq('id', 1)
-        .maybeSingle()),
       queryResult(client.from('quiz_workspace').select('data').eq('id', 1).maybeSingle()),
       queryResult(client.from('quiz_active_attempts')
         .select('generation, owner_token, attempt_data')
@@ -114,11 +119,6 @@ export default async function handler(req, res) {
         .eq('username', username)
         .maybeSingle())
     ]);
-
-    if (!config?.published || config.stopped || config.quiz_id !== quizId
-      || (config.end_time && Date.parse(config.end_time) < Date.now())) {
-      return res.status(409).json({ error: 'This quiz is no longer active.' });
-    }
     if (!attempt || Number(attempt.generation) !== generation || attempt.owner_token !== ownerToken) {
       return res.status(403).json({ error: 'The active attempt could not be verified.' });
     }
