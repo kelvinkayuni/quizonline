@@ -6,6 +6,7 @@ import { areSemanticWordPairsEqual, compareDirectionalText, compareSemanticText,
 import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, deleteTeacherQuizQuestionHistory, hydrateQuizState, listTeacherQuizQuestionHistory, loadStudentQuizReport, loadStudentQuizResult, loadTeacherQuizQuestionHistory, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizConfiguration, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAccessChange, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt, waitForPendingQuestionSaves } from './supabaseStore.js';
 import { loadStudentPresence, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { SHORT_ANSWER_FULL_CREDIT_THRESHOLD, roundToOneDecimal, shortAnswerMarksAwarded, shortAnswerMatchScore } from './shortAnswerMatching.js';
+import { semanticCartographerMarksAwarded } from './semanticCartographerScoring.js';
 import { assignUniqueStudentQuestionOrders } from './studentQuestionOrders.js';
 import { ensureQuestionPersistenceId, getPublishedQuestionSnapshot } from './questionPersistence.js';
 let shortAnswerSubmissionInProgress = false;
@@ -1457,7 +1458,7 @@ function studentApp() {
     ? `<div class="field full"><label for="short-answer-response">Your answer</label><textarea id="short-answer-response" placeholder="Type your answer..." ${session.feedback ? 'disabled' : ''}>${esc(session.response || '')}</textarea></div>`
     : question.choices.map((choice, index) => `<button class="answer ${session.selected === index ? 'selected' : ''}" data-answer="${index}"><span class="answer-letter">${String.fromCharCode(65 + index)}</span>${esc(choice)}</button>`).join('');
   const feedback = session.feedback
-    ? `<div class="feedback ${session.feedback.correct || session.feedback.partial ? 'correct' : 'incorrect'}">${session.feedback.partial ? `Partially correct. ${session.feedback.marksAwarded} of ${question.marks} marks awarded.` : session.feedback.correct ? `Correct. +${question.marks} marks awarded.` : 'Not quite. This question scores zero marks.'}</div>`
+    ? `<div class="feedback ${session.feedback.correct || session.feedback.partial ? 'correct' : 'incorrect'}">${session.feedback.partial ? `Partially correct. ${session.feedback.marksAwarded} of ${question.marks} marks awarded.` : session.feedback.correct ? `Correct. +${question.marks} marks awarded.` : 'Not quite. This question scores zero marks.'}${session.feedback.scoringMethod === 'cartographer' ? `<span class="subtle">Cartographer similarity: ${session.feedback.semanticSimilarity}% · coverage: ${session.feedback.semanticCoverage}%</span>` : session.feedback.scoringMethod === 'concept-matcher-fallback' ? '<span class="subtle">Marked with the existing concept matcher because Cartographer was unavailable.</span>' : ''}</div>`
     : '';
   const isLastQuestion = session.index === questionCount - 1;
   return `<main class="main"><div class="quiz-shell"><div class="quiz-top"><div><div class="brand"><span class="brand-mark">OQ</span><strong>ONLINE QUIZ</strong></div><p class="subtle" style="margin:14px 0 0">${esc(session.username)} · Assessment in progress</p></div><div class="student-actions"><button class="btn btn-secondary btn-small" data-action="view-student-history">View quiz history</button><button class="btn btn-secondary btn-small" data-action="download-student-history" ${state.studentHistory.some(item => item.username === session.username) ? '' : 'disabled'}>Download history</button><button class="btn btn-secondary btn-small" data-action="logout">Sign out</button><div class="timer" id="timer">${formatTime(session.remaining)}</div></div></div><div class="quiz-progress"><span style="width:${progress}%"></span></div><div class="quiz-card card"><div class="eyebrow quiz-number">Question ${session.index + 1} of ${questionCount} · ${question.marks} marks</div><h1 class="quiz-question">${esc(question.text)}</h1><div class="answers">${answers}</div>${feedback}<div class="quiz-actions"><button class="btn btn-primary" data-action="submit-answer" ${!hasAnswer || session.feedback ? 'disabled' : ''}>${isLastQuestion ? 'Finish quiz' : 'Submit answer'} →</button>${session.feedback ? `<button class="btn btn-secondary" style="margin-left:9px" data-action="next-question">${isLastQuestion ? 'View result' : 'Next question'} →</button>` : ''}</div></div></div></main>`;
@@ -3013,7 +3014,10 @@ function finalizeStudentResult(studentSession, autoSubmitted) {
       studentAnswer: studentAnswer || 'Not answered',
       submitted: Boolean(answer),
       marksAwarded,
-      marksPossible
+      marksPossible,
+      scoringMethod: answer?.scoringMethod || null,
+      semanticSimilarity: answer?.semanticSimilarity ?? null,
+      semanticCoverage: answer?.semanticCoverage ?? null
     };
   });
   const result = {
@@ -3225,6 +3229,40 @@ document.addEventListener('input', event => {
 });
 
 const submitMultipleChoiceAnswer = submitAnswer;
+async function requestCartographerShortAnswerScore(question, response) {
+  if (!session?.attemptOwnerToken || session.attemptGeneration == null) {
+    throw new Error('The active student attempt is not available to Cartographer.');
+  }
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+  try {
+    const result = await fetch('/api/score-short-answer', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        quizId: session.quizId,
+        username: session.username,
+        questionId: question.id,
+        response,
+        attemptGeneration: session.attemptGeneration,
+        attemptOwnerToken: session.attemptOwnerToken
+      })
+    });
+    if (!result.ok) throw new Error(`Cartographer scoring returned ${result.status}.`);
+    const data = await result.json();
+    const score = Number(data.score);
+    const coverage = Number(data.coverage);
+    if (!Number.isFinite(score) || score < 0 || score > 100
+      || !Number.isFinite(coverage) || coverage < 0 || coverage > 100) {
+      throw new Error('Cartographer returned invalid scoring data.');
+    }
+    return { score, coverage };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 submitAnswer = async function submitTypedOrMultipleChoiceAnswer() {
   const question = (session?.questionOrder || state.questions)[session?.index];
   if (question?.type !== 'short-answer') return submitMultipleChoiceAnswer();
@@ -3240,13 +3278,40 @@ submitAnswer = async function submitTypedOrMultipleChoiceAnswer() {
     submitButton.textContent = 'Checking answer...';
   }
   try {
-    const credit = shortAnswerMatchScore(question.answer, response);
-    const correct = credit >= SHORT_ANSWER_FULL_CREDIT_THRESHOLD;
     const totalMarks = Number(question.marks) || 1;
-    const marksAwarded = shortAnswerMarksAwarded(credit, totalMarks);
+    let semanticResult = null;
+    try {
+      semanticResult = await requestCartographerShortAnswerScore(question, response);
+    } catch {
+      semanticResult = null;
+    }
+    const scoringMethod = semanticResult ? 'cartographer' : 'concept-matcher-fallback';
+    const credit = semanticResult
+      ? semanticResult.score / 100
+      : shortAnswerMatchScore(question.answer, response);
+    const marksAwarded = semanticResult
+      ? semanticCartographerMarksAwarded(semanticResult.score, totalMarks)
+      : shortAnswerMarksAwarded(credit, totalMarks);
+    const correct = marksAwarded >= totalMarks;
     const partial = !correct && marksAwarded > 0;
-    session.feedback = { correct, partial, marksAwarded };
-    session.answers.push({ questionId: question.id, selected: response, correct, partial, marksAwarded });
+    session.feedback = {
+      correct,
+      partial,
+      marksAwarded,
+      scoringMethod,
+      semanticSimilarity: semanticResult?.score ?? null,
+      semanticCoverage: semanticResult?.coverage ?? null
+    };
+    session.answers.push({
+      questionId: question.id,
+      selected: response,
+      correct,
+      partial,
+      marksAwarded,
+      scoringMethod,
+      semanticSimilarity: semanticResult?.score ?? null,
+      semanticCoverage: semanticResult?.coverage ?? null
+    });
     saveSubmittedStudentAnswer();
     app();
   } finally {

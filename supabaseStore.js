@@ -49,7 +49,10 @@ function attemptDataFromSession(studentSession) {
       studentAnswer: studentAnswer || 'Not answered',
       submitted: true,
       marksAwarded,
-      marksPossible
+      marksPossible,
+      scoringMethod: answer.scoringMethod || null,
+      semanticSimilarity: answer.semanticSimilarity ?? null,
+      semanticCoverage: answer.semanticCoverage ?? null
     }];
   });
   return {
