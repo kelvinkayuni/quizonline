@@ -1,8 +1,8 @@
 function courseDisplayValue(value) { const normalized = String(value || '').trim(); return normalized === '34' || normalized.toLowerCase() === 'course' ? '' : normalized; }
 function studentCourseDetails() { const courseName = courseDisplayValue(state.config.courseName); const courseCode = courseDisplayValue(state.config.courseCode); return courseName || courseCode ? `<div class="course-banner">${courseName ? `<strong>${esc(courseName)}</strong>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''; }
 import { supabase } from './supabase.js';
-import { extractCartographerFile, insertCartographerDirectionalRelation, insertCartographerDocument, insertCartographerGlossaryEntry, insertCartographerNonSimilarPair, listCartographerCoordinates, listCartographerDirectionalRelations, listCartographerDocuments, listCartographerGlossary, listCartographerNonSimilarPairs, removeCartographerDirectionalRelation, removeCartographerDocument, removeCartographerGlossaryEntry, saveCartographerCoordinates } from './semanticCorpus.js';
-import { areSemanticWordPairsEqual, compareDirectionalText, compareSemanticText, createSemanticMap, extractDirectionalRelationCandidates, isGlossaryVariantCanonicalPair, normalizeCorpusText, normalizeDirectionalAction, normalizeSemanticWord, tokenizeSemanticText, trainSemanticModel } from './semanticModel.js';
+import { extractCartographerFile, insertCartographerDocument, insertCartographerGlossaryEntry, insertCartographerNonSimilarPair, listCartographerCoordinates, listCartographerDocuments, listCartographerGlossary, listCartographerNonSimilarPairs, removeCartographerDocument, removeCartographerGlossaryEntry, saveCartographerCoordinates } from './semanticCorpus.js';
+import { areSemanticWordPairsEqual, compareSemanticText, createSemanticMap, isGlossaryVariantCanonicalPair, normalizeCorpusText, normalizeSemanticWord, tokenizeSemanticText, trainSemanticModel } from './semanticModel.js';
 import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, deleteTeacherQuizQuestionHistory, hydrateQuizState, listTeacherQuizQuestionHistory, loadStudentQuizReport, loadStudentQuizResult, loadTeacherQuizQuestionHistory, loadTeacherShortAnswerReview, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizConfiguration, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAccessChange, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt, reviewTeacherShortAnswerResult, waitForPendingQuestionSaves } from './supabaseStore.js';
 import { loadStudentPresence, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { SHORT_ANSWER_FULL_CREDIT_THRESHOLD, roundToOneDecimal, shortAnswerMarksAwarded, shortAnswerMatchScore } from './shortAnswerMatching.js';
@@ -224,8 +224,6 @@ const CARTOGRAPHER_SIMILARITY_SCROLL_KEY = 'cartographer-similarity-pairs-scroll
 let cartographerDocuments = [];
 let cartographerGlossary = [];
 let cartographerNonSimilarPairs = [];
-let cartographerDirectionalRelations = [];
-let cartographerDirectionalCandidateCache = [];
 let cartographerSimilarityPairs = loadCartographerSimilarityPairs();
 let cartographerCoordinates = [];
 let cartographerSignature = '';
@@ -659,8 +657,7 @@ async function loadCartographerCorpus() {
   cartographerLoadError = '';
   app();
   try {
-    [cartographerDocuments, cartographerGlossary, cartographerCoordinates, cartographerNonSimilarPairs, cartographerDirectionalRelations] = await Promise.all([listCartographerDocuments(), listCartographerGlossary(), listCartographerCoordinates(), listCartographerNonSimilarPairs(), listCartographerDirectionalRelations()]);
-    refreshCartographerDirectionalCandidateCache();
+    [cartographerDocuments, cartographerGlossary, cartographerCoordinates, cartographerNonSimilarPairs] = await Promise.all([listCartographerDocuments(), listCartographerGlossary(), listCartographerCoordinates(), listCartographerNonSimilarPairs()]);
     await rebuildCartographerModel(true);
     cartographerLoaded = true;
   } catch (error) {
@@ -698,7 +695,6 @@ async function saveCartographerDocument(name, sourceType, text) {
   if (duplicate) throw new Error(`This text is already in the corpus as "${duplicate.name}".`);
   const document = await insertCartographerDocument({ name: String(name || 'Untitled document').trim().slice(0, 120), source_type: sourceType, text_content: normalizedText, word_count: normalizedText.match(/[\p{L}\p{N}]+/gu)?.length || 0 });
   cartographerDocuments.unshift(document);
-  refreshCartographerDirectionalCandidateCache();
   await rebuildCartographerModel(true);
   cartographerResult = null;
   cartographerLoaded = true;
@@ -709,8 +705,6 @@ async function deleteCartographerDocument(id) {
   try {
     await removeCartographerDocument(id);
     cartographerDocuments = cartographerDocuments.filter(document => document.id !== id);
-    cartographerDirectionalRelations = cartographerDirectionalRelations.filter(relation => relation.source_document_id !== id);
-    refreshCartographerDirectionalCandidateCache();
     await rebuildCartographerModel(true);
     cartographerResult = null;
     cartographerSelectedWord = '';
@@ -812,54 +806,6 @@ function injectCartographerSimilarityCalibrationPanel() {
     }, { passive: true });
   }
 }
-function cartographerDirectionalCandidates() {
-  const reviewedSources = new Set(cartographerDirectionalRelations.map(relation => `${relation.source_document_id}|${normalizeCorpusText(relation.source_text)}`));
-  return cartographerDirectionalCandidateCache
-    .filter(candidate => !reviewedSources.has(`${candidate.source_document_id}|${normalizeCorpusText(candidate.source_text)}`))
-    .slice(0, 24);
-}
-function refreshCartographerDirectionalCandidateCache() {
-  cartographerDirectionalCandidateCache = extractDirectionalRelationCandidates(cartographerDocuments, cartographerGlossary, cartographerNegationRules());
-}
-function injectCartographerDirectionalRelationsPanel() {
-  const calibrationPanel = document.querySelector('.cartographer-similarity-calibration-panel');
-  if (!calibrationPanel || document.querySelector('.cartographer-directional-panel')) return;
-  const candidates = cartographerDirectionalCandidates();
-  const candidateRows = candidates.length
-    ? candidates.map((candidate, index) => `<form class="cartographer-relation-candidate cartographer-directional-form" data-document-id="${esc(candidate.source_document_id)}" data-source-text="${esc(candidate.source_text)}"><p class="cartographer-relation-source">${esc(candidate.source_text)}</p><div class="cartographer-relation-fields"><label>Subject<input name="subject" maxlength="200" value="${esc(candidate.subject)}" required /></label><label>Action<input name="action" maxlength="80" value="${esc(candidate.action)}" required /></label><label>Object<input name="object" maxlength="200" value="${esc(candidate.object)}" required /></label></div><div class="cartographer-relation-controls"><label>Polarity<select name="polarity"><option value="1" ${candidate.polarity > 0 ? 'selected' : ''}>Positive</option><option value="-1" ${candidate.polarity < 0 ? 'selected' : ''}>Negated</option></select></label><button class="btn btn-secondary btn-small" type="submit" ${cartographerLoading ? 'disabled' : ''}>Approve relation ${index + 1}</button></div></form>`).join('')
-    : '<p class="subtle">No unreviewed one-action sentences found in the uploaded material.</p>';
-  const reviewedRows = cartographerDirectionalRelations.length
-    ? cartographerDirectionalRelations.map(relation => `<div class="cartographer-reviewed-relation"><span><strong>${esc(relation.subject)}</strong> ${esc(relation.action)} <strong>${esc(relation.object)}</strong>${Number(relation.polarity) < 0 ? ' <span class="subtle">(negated)</span>' : ''}<span class="cartographer-relation-source">${esc(relation.source_text)}</span></span><button class="cartographer-delete" data-action="cartographer-directional-delete" data-id="${esc(relation.id)}" aria-label="Remove reviewed relation ${esc(relation.subject)} ${esc(relation.action)} ${esc(relation.object)}" title="Remove reviewed relation">×</button></div>`).join('')
-    : '<p class="subtle">No reviewed relations saved yet.</p>';
-  calibrationPanel.insertAdjacentHTML('afterend', `<section class="card panel cartographer-directional-panel"><div class="panel-head"><div><h2>Directional relations</h2><p class="subtle">Review extracted subject, action, and object roles. Only approved frames guide directional comparisons.</p></div></div><div class="cartographer-relation-list">${candidateRows}</div><div><h3 class="cartographer-subheading">Reviewed frames</h3><div class="cartographer-reviewed-list">${reviewedRows}</div></div></section>`);
-}
-function injectCartographerDirectionalResult() {
-  const direction = cartographerResult?.direction;
-  const score = document.querySelector('.cartographer-score');
-  if (!direction || !score) return;
-  const labels = {
-    'same-direction': 'Same direction',
-    'reversed-direction': 'Reversed direction',
-    different: 'Different relation',
-    uncertain: 'Uncertain direction'
-  };
-  const result = document.createElement('div');
-  result.className = `cartographer-direction-result cartographer-direction-${direction.status}`;
-  const heading = document.createElement('strong');
-  heading.textContent = labels[direction.status] || labels.uncertain;
-  result.append(heading);
-  if (direction.frameA && direction.frameB) {
-    const describe = frame => `${frame.subject} ${frame.action} ${frame.object}${frame.polarity < 0 ? ' (negated)' : ''}`;
-    const details = document.createElement('p');
-    details.textContent = `A: ${describe(direction.frameA)} · B: ${describe(direction.frameB)}`;
-    result.append(details);
-  } else {
-    const details = document.createElement('p');
-    details.textContent = 'A reliable single-action relation could not be extracted from both phrases.';
-    result.append(details);
-  }
-  score.insertAdjacentElement('afterend', result);
-}
 function injectCartographerNonSimilarPairNotice() {
   if (!cartographerResult?.nonSimilarPairMatched) return;
   const score = document.querySelector('.cartographer-score');
@@ -905,7 +851,6 @@ async function saveCartographerGlossaryEntry(alias, canonicalTerm) {
   if (cartographerSimilarityPairs.some(pair => areSemanticWordPairsEqual(aliasCanonical, targetCanonical, pair.word_a, pair.word_b))) throw new Error('That variant and canonical word already exist as a final-score calibration pair. Remove the calibration pair before adding this alias.');
   const entry = await insertCartographerGlossaryEntry({ alias: aliasTerm, canonical_term: canonicalWord });
   cartographerGlossary.push(entry);
-  refreshCartographerDirectionalCandidateCache();
   await rebuildCartographerModel(true);
   cartographerSelectedWord = '';
   cartographerResult = null;
@@ -921,40 +866,9 @@ async function saveCartographerNegationRule(inputNegativeForm, inputBaseWord) {
   const [wordA, wordB] = negativeForm < baseWord ? [negativeForm, baseWord] : [baseWord, negativeForm];
   const pair = await insertCartographerNonSimilarPair({ word_a: wordA, word_b: wordB, negative_form: negativeForm, base_word: baseWord });
   cartographerNonSimilarPairs.push(pair);
-  refreshCartographerDirectionalCandidateCache();
   await rebuildCartographerModel(true);
   cartographerResult = null;
   cartographerSelectedWord = '';
-}
-async function saveCartographerDirectionalRelation(form) {
-  const data = new FormData(form);
-  const subject = String(data.get('subject') || '').trim();
-  const action = normalizeDirectionalAction(data.get('action'), cartographerGlossary);
-  const object = String(data.get('object') || '').trim();
-  const sourceDocumentId = form.dataset.documentId;
-  const sourceText = form.dataset.sourceText || '';
-  if (!subject || !object || !sourceDocumentId || !sourceText) throw new Error('Subject, action, object, and source sentence are required.');
-  if (!action) throw new Error('Choose one recognized action from the current Cartographer action inventory.');
-  const relation = await insertCartographerDirectionalRelation({
-    source_document_id: sourceDocumentId,
-    source_text: sourceText,
-    subject: subject.slice(0, 200),
-    action,
-    object: object.slice(0, 200),
-    polarity: Number(data.get('polarity')) < 0 ? -1 : 1
-  });
-  cartographerDirectionalRelations.unshift(relation);
-  cartographerResult = null;
-}
-async function deleteCartographerDirectionalRelation(id) {
-  try {
-    await removeCartographerDirectionalRelation(id);
-    cartographerDirectionalRelations = cartographerDirectionalRelations.filter(relation => relation.id !== id);
-    cartographerResult = null;
-    app();
-  } catch (error) {
-    showToast(`Reviewed relation could not be removed: ${error.message || error}`, 'error');
-  }
 }
 function saveCartographerSimilarityRule(inputWordA, inputWordB, inputSimilarity) {
   const rawWordA = normalizeSemanticWord(inputWordA);
@@ -995,7 +909,6 @@ async function deleteCartographerGlossaryEntry(id) {
   try {
     await removeCartographerGlossaryEntry(id);
     cartographerGlossary = cartographerGlossary.filter(entry => entry.id !== id);
-    refreshCartographerDirectionalCandidateCache();
     await rebuildCartographerModel(true);
     cartographerResult = null;
     app();
@@ -2021,10 +1934,8 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
     injectCartographerGlossary();
     injectCartographerNonSimilarPairForm();
     injectCartographerSimilarityCalibrationPanel();
-    injectCartographerDirectionalRelationsPanel();
     injectCartographerCoordinatePlane();
     injectCartographerNonSimilarPairNotice();
-    injectCartographerDirectionalResult();
     updateCartographerUploadStatus();
     if (!cartographerLoaded && !cartographerLoading && !cartographerLoadError) void loadCartographerCorpus();
     const reload = document.querySelectorAll('[data-action="cartographer-reload"]');
@@ -2081,23 +1992,9 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
     if (compareForm) compareForm.addEventListener('submit', event => {
       event.preventDefault();
       const data = new FormData(compareForm);
-      cartographerResult = { textA: String(data.get('textA') || ''), textB: String(data.get('textB') || ''), ...compareSemanticText(cartographerModel, data.get('textA'), data.get('textB'), cartographerNegationRules(), cartographerLegacyNonSimilarPairs(), cartographerSimilarityCalibrationPairs()), direction: compareDirectionalText(data.get('textA'), data.get('textB'), cartographerGlossary, cartographerNegationRules(), cartographerDirectionalRelations) };
+      cartographerResult = { textA: String(data.get('textA') || ''), textB: String(data.get('textB') || ''), ...compareSemanticText(cartographerModel, data.get('textA'), data.get('textB'), cartographerNegationRules(), cartographerLegacyNonSimilarPairs(), cartographerSimilarityCalibrationPairs()) };
       app();
     });
-    document.querySelectorAll('.cartographer-directional-form').forEach(form => form.addEventListener('submit', async event => {
-      event.preventDefault();
-      const button = event.submitter;
-      if (button) button.disabled = true;
-      try {
-        await saveCartographerDirectionalRelation(form);
-        showToast('Directional relation reviewed and saved.');
-        app();
-      } catch (error) {
-        showToast(error.message || 'Directional relation could not be saved.', 'error');
-        if (button) button.disabled = false;
-      }
-    }));
-    document.querySelectorAll('[data-action="cartographer-directional-delete"]').forEach(button => button.addEventListener('click', () => { void deleteCartographerDirectionalRelation(button.dataset.id); }));
     const similarityRuleForm = document.querySelector('#cartographer-similarity-rule-form');
     if (similarityRuleForm) similarityRuleForm.addEventListener('submit', event => {
       event.preventDefault();
