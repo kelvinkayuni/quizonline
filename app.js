@@ -606,7 +606,7 @@ function navButton(iconName, label, target, active) { return `<button class="${t
 function timeGreeting() { const hour = new Date().getHours(); if (hour >= 5 && hour < 12) return 'Good morning'; if (hour >= 12 && hour < 17) return 'Good afternoon'; if (hour >= 17 && hour < 21) return 'Good evening'; return 'Good night'; }
 function viewTitle(view) { return ({ overview: `${timeGreeting()}, Kelvin.`, questions: 'Question bank', config: 'Quiz configuration', users: 'Student access', results: 'Results & monitoring', cartographer: 'Semantic Cartographer' }[view]); }
 function viewDescription(view) { return ({ overview: 'A live view of your assessment workspace.', questions: 'Build reusable questions with flexible scoring.', config: 'Set the rules, timing, and availability window.', users: 'Import and manage student login credentials.', results: 'Track participation and export completed work.', cartographer: 'Build a course corpus and explore its semantic relationships.' }[view]); }
-function viewContent(view) { const content = ({ overview: overviewView, questions: questionsView, config: configView, users: usersView, results: resultsView, cartographer: cartographerView }[view])(); return view === 'results' ? `${content}${resultFileSelectionPanel()}${teacherShortAnswerReviewQueue()}${teacherShortAnswerReviewPanel()}` : content; }
+function viewContent(view) { const content = ({ overview: overviewView, questions: questionsView, config: configView, users: usersView, results: resultsView, cartographer: cartographerView }[view])(); return view === 'results' ? `${content}${resultFileSelectionPanel()}${teacherShortAnswerReviewPanel()}` : content; }
 function cartographerView() {
   const model = cartographerModel;
   const map = model ? createSemanticMap(model, 60, cartographerCoordinates, cartographerSignature) : { nodes: [], edges: [] };
@@ -1447,15 +1447,10 @@ function resultsView() {
   const resultRows = selectedRows.map(result => {
     const quizId = result.quizId || fileQuizId || 'Not recorded';
     const reviewPending = result.reviewStatus === 'provisional';
-    return `<tr><td>${esc(quizId)}</td><td><strong>${esc(result.username)}</strong></td><td>${result.attempted}</td><td>${result.incorrect}</td><td>${result.score}/${result.totalMarks}</td><td><strong>${result.percentage}%</strong></td><td><span class="badge">${reviewPending ? 'Review pending' : 'Final'}</span>${reviewPending ? `<button class="btn btn-secondary btn-small" data-action="open-short-answer-review" data-quiz-id="${esc(quizId)}" data-username="${esc(result.username)}">Review answers</button>` : ''}</td></tr>`;
+    return `<tr><td>${esc(quizId)}</td><td><strong>${esc(result.username)}</strong></td><td>${result.attempted}</td><td>${result.incorrect}</td><td>${result.score}/${result.totalMarks}</td><td><strong>${result.percentage}%</strong></td><td><span class="badge">${reviewPending ? 'Review pending' : 'Final'}</span>${reviewPending ? `<button type="button" class="btn btn-secondary btn-small" data-action="open-short-answer-review" data-quiz-id="${esc(quizId)}" data-username="${esc(result.username)}">Review answers</button>` : ''}</td></tr>`;
   }).join('');
   return `<section class="card panel"><div class="panel-head"><div><h2>Quiz result files</h2><p class="subtle">Open a stored quiz workbook here or download it for sharing.</p></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end"><button class="btn btn-secondary btn-small" data-action="clear-result-files" ${state.resultFiles.length ? '' : 'disabled'}>Clear history</button>${file ? `<button class="btn btn-coral btn-small" data-action="delete-result-file">Delete selected</button><button class="btn btn-secondary btn-small" data-action="open-result">Open in system</button><button class="btn btn-primary btn-small" data-action="download-results">${icon('download')} Download</button>` : ''}</div></div>${state.resultFiles.length ? `<div class="result-history-toolbar"><div class="file-selector"><label class="eyebrow">Select quiz file</label><select id="result-file-select">${state.resultFiles.map(item => `<option value="${item.id}" ${item.id === file.id ? 'selected' : ''}>${esc(item.name)} · ${formatDate(item.createdAt)}</option>`).join('')}</select>${fileQuizId ? `<p class="subtle">Quiz ID: <strong>${esc(fileQuizId)}</strong></p>` : ''}</div><button class="btn btn-secondary btn-small" data-action="view-question-history">${questionHistoryVisible ? 'Hide quiz history' : 'View quiz history'}</button></div><div class="table-wrap"><table><thead><tr><th>Quiz ID</th><th>Student username</th><th>Attempted</th><th>Incorrect</th><th>Total marks</th><th>Percentage</th><th>Status</th></tr></thead><tbody>${resultRows}</tbody></table></div>` : `<div class="result-history-toolbar"><div class="empty">No quiz result files yet. Completed quizzes will be stored here automatically.</div><button class="btn btn-secondary btn-small" data-action="view-question-history">${questionHistoryVisible ? 'Hide quiz history' : 'View quiz history'}</button></div>`}${teacherQuestionHistoryPanel()}</section><section class="grid two-col" style="margin-top:17px"><div class="card panel"><div class="panel-head"><div><h2>Live monitoring</h2><p class="subtle">Active quiz sessions</p></div><span class="badge">${state.users.filter(user => user.status === 'online').length} online</span></div>${liveStudents()}</div><div class="card panel"><div class="panel-head"><div><h2>Assessment health</h2><p class="subtle">Completion overview</p></div><button class="btn btn-secondary btn-small" data-action="clear-health" ${health.length ? '' : 'disabled'}>Clear health</button></div><div style="display:flex;align-items:baseline;gap:8px;margin:16px 0 10px"><strong style="font-size:33px;letter-spacing:-.07em">${health.length}</strong><span class="subtle">completed</span></div><div class="progress"><span style="width:${state.users.length ? Math.min(100, health.length / state.users.length * 100) : 0}%"></span></div></div></section>`;
 }
-function teacherShortAnswerReviewQueue() {
-  const pendingResults = state.results.filter(result => result.reviewStatus === 'provisional');
-  return `<section class="card panel short-answer-review-queue"><div class="panel-head"><div><h2>Short-answer review</h2><p class="subtle">${pendingResults.length} provisional result${pendingResults.length === 1 ? '' : 's'}</p></div></div>${pendingResults.length ? `<div class="activity">${pendingResults.map(result => `<div class="activity-item"><span><strong>${esc(result.username)}</strong><br><span class="subtle">${esc(result.quizId || 'Quiz')} · Suggested total ${result.score}/${result.totalMarks}</span></span><button class="btn btn-secondary btn-small" data-action="open-short-answer-review" data-quiz-id="${esc(result.quizId || '')}" data-username="${esc(result.username)}" ${teacherMutationInFlight ? 'disabled' : ''}>Review answers</button></div>`).join('')}</div>` : '<div class="empty">No short-answer results are waiting for review.</div>'}</section>`;
-}
-
 function teacherShortAnswerReviewPanel() {
   if (teacherShortAnswerReviewLoading && teacherShortAnswerReviewTarget) {
     return '<section class="card panel short-answer-review-panel"><p class="subtle">Loading submitted answers...</p></section>';
@@ -1524,11 +1519,6 @@ async function saveTeacherShortAnswerReview(event) {
 }
 
 document.addEventListener('click', event => {
-  const reviewButton = event.target.closest('[data-action="open-short-answer-review"]');
-  if (reviewButton) {
-    void openTeacherShortAnswerReview(reviewButton.dataset.quizId, reviewButton.dataset.username);
-    return;
-  }
   if (event.target.closest('[data-action="close-short-answer-review"]') && !teacherMutationInFlight) {
     teacherShortAnswerReview = null;
     teacherShortAnswerReviewTarget = null;
@@ -1986,6 +1976,11 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
   const viewHistory = document.querySelector('[data-action="view-student-history"]'); if (viewHistory) viewHistory.addEventListener('click', () => document.querySelector('#student-history-panel')?.scrollIntoView({ behavior: 'smooth' }));
   const downloadHistory = document.querySelector('[data-action="download-student-history"]'); if (downloadHistory) downloadHistory.addEventListener('click', downloadStudentHistory);
   document.querySelectorAll('[data-action="download-quiz-report"]').forEach(button => button.addEventListener('click', () => { void downloadStudentQuizReport(button.dataset.quizId, button); }));
+  document.querySelectorAll('[data-action="open-short-answer-review"]').forEach(button => button.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    void openTeacherShortAnswerReview(button.dataset.quizId, button.dataset.username);
+  }));
   const deleteResultFile = document.querySelector('[data-action="delete-result-file"]'); if (deleteResultFile) deleteResultFile.addEventListener('click', deleteSelectedResultFile);
   const clearResultFiles = document.querySelector('[data-action="clear-result-files"]'); if (clearResultFiles) clearResultFiles.addEventListener('click', clearResultFileHistory);
   const clearHealth = document.querySelector('[data-action="clear-health"]'); if (clearHealth) clearHealth.addEventListener('click', clearAssessmentHealth);
