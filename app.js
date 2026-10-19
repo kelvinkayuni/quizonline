@@ -14,6 +14,8 @@ let shortAnswerSubmissionInProgress = false;
 let teacherShortAnswerReview = null;
 let teacherShortAnswerReviewTarget = null;
 let teacherShortAnswerReviewLoading = false;
+let teacherShortAnswerReviewDraft = {};
+let teacherShortAnswerReviewSaving = false;
 let lastProvisionalResultRefreshAt = 0;
 
 async function refreshStudentQuizState() {
@@ -480,6 +482,9 @@ function ensureStudentQuestionOrder() {
 }
 function app() {
   const studentDirectoryScrollTop = document.querySelector('.student-account-actions + .table-wrap')?.scrollTop;
+  const focusedReviewQuestionId = document.activeElement?.matches('#teacher-short-answer-review-form [data-question-id]')
+    ? document.activeElement.dataset.questionId
+    : null;
   const cartographerPageScrollTop = session?.role === 'teacher' && teacherView === 'cartographer' ? window.scrollY : undefined;
   const cartographerRefreshState = session?.role === 'teacher' && teacherView === 'cartographer' ? captureCartographerRefreshState() : null;
   const cartographerMapScroll = document.querySelector('.cartographer-map-scroll');
@@ -506,6 +511,7 @@ function app() {
   if (refreshedCartographerDocuments && cartographerDocumentScrollTop !== undefined) {
     refreshedCartographerDocuments.scrollTop = cartographerDocumentScrollTop;
   }
+  if (focusedReviewQuestionId) document.getElementById(`teacher-review-${focusedReviewQuestionId}`)?.focus({ preventScroll: true });
   renderQuizFileSelectDropdown();
   updateStudentLastSeenCells();
   updateImportedFileControls();
@@ -1457,7 +1463,10 @@ function teacherShortAnswerReviewPanel() {
   }
   if (!teacherShortAnswerReview) return '';
   const details = teacherShortAnswerReview.question_details.filter(detail => detail.questionType === 'short-answer' && detail.submitted);
-  return `<section class="card panel short-answer-review-panel"><div class="panel-head"><div><h2>Review ${esc(teacherShortAnswerReview.username)}</h2><p class="subtle">${esc(teacherShortAnswerReview.quiz_id)} · Provisional ${teacherShortAnswerReview.score}/${teacherShortAnswerReview.total_marks}</p></div><button class="btn btn-secondary btn-small" data-action="close-short-answer-review">Close</button></div><form id="teacher-short-answer-review-form">${details.map(detail => `<article class="short-answer-review-item"><div class="eyebrow">Question ${detail.questionNumber} · ${detail.marksPossible} marks</div><h3>${esc(detail.questionText)}</h3>${detail.teacherExpectedAnswer ? `<p><strong>Expected concepts</strong><br>${esc(detail.teacherExpectedAnswer)}</p>` : ''}${detail.teacherReferenceAnswer ? `<p><strong>Teacher reference answer</strong><br>${esc(detail.teacherReferenceAnswer)}</p>` : ''}<p><strong>Student answer</strong><br>${esc(detail.studentAnswer || 'No answer recorded')}</p><p class="subtle">Cartographer suggested ${detail.suggestedMarksAwarded ?? detail.marksAwarded}/${detail.marksPossible}${detail.semanticSimilarity == null ? '' : ` · similarity ${detail.semanticSimilarity}% · coverage ${detail.semanticCoverage}%`}</p><div class="field"><label for="teacher-review-${esc(detail.questionId)}">Teacher marks</label><input id="teacher-review-${esc(detail.questionId)}" name="marksAwarded" data-question-id="${esc(detail.questionId)}" type="number" min="0" max="${Number(detail.marksPossible)}" step="0.1" value="${Number(detail.teacherMarksAwarded ?? detail.marksAwarded) || 0}" required ${teacherMutationInFlight ? 'disabled' : ''}></div></article>`).join('')}<button class="btn btn-primary" type="submit" ${teacherMutationInFlight || !details.length ? 'disabled' : ''}>${teacherMutationInFlight ? 'Saving review...' : 'Save review and finalize result'}</button></form></section>`;
+  return `<section class="card panel short-answer-review-panel"><div class="panel-head"><div><h2>Review ${esc(teacherShortAnswerReview.username)}</h2><p class="subtle">${esc(teacherShortAnswerReview.quiz_id)} · Provisional ${teacherShortAnswerReview.score}/${teacherShortAnswerReview.total_marks}</p></div><button type="button" class="btn btn-secondary btn-small" data-action="close-short-answer-review" ${teacherShortAnswerReviewSaving ? 'disabled' : ''}>Close</button></div><form id="teacher-short-answer-review-form">${details.map(detail => {
+    const enteredMarks = teacherShortAnswerReviewDraft[detail.questionId] ?? (Number(detail.teacherMarksAwarded ?? detail.marksAwarded) || 0);
+    return `<article class="short-answer-review-item"><div class="eyebrow">Question ${detail.questionNumber} · ${detail.marksPossible} marks</div><h3>${esc(detail.questionText)}</h3>${detail.teacherExpectedAnswer ? `<p><strong>Expected concepts</strong><br>${esc(detail.teacherExpectedAnswer)}</p>` : ''}${detail.teacherReferenceAnswer ? `<p><strong>Teacher reference answer</strong><br>${esc(detail.teacherReferenceAnswer)}</p>` : ''}<p><strong>Student answer</strong><br>${esc(detail.studentAnswer || 'No answer recorded')}</p><p class="subtle">Cartographer suggested ${detail.suggestedMarksAwarded ?? detail.marksAwarded}/${detail.marksPossible}${detail.semanticSimilarity == null ? '' : ` · similarity ${detail.semanticSimilarity}% · coverage ${detail.semanticCoverage}%`}</p><div class="field"><label for="teacher-review-${esc(detail.questionId)}">Teacher marks</label><input id="teacher-review-${esc(detail.questionId)}" name="marksAwarded" data-question-id="${esc(detail.questionId)}" type="number" min="0" max="${Number(detail.marksPossible)}" step="0.1" value="${esc(enteredMarks)}" required ${teacherShortAnswerReviewSaving ? 'disabled' : ''}></div></article>`;
+  }).join('')}<button class="btn btn-primary" type="submit" ${teacherShortAnswerReviewSaving || !details.length ? 'disabled' : ''}>${teacherShortAnswerReviewSaving ? 'Saving review...' : 'Save review and finalize result'}</button></form></section>`;
 }
 
 async function openTeacherShortAnswerReview(quizId, username) {
@@ -1466,6 +1475,7 @@ async function openTeacherShortAnswerReview(quizId, username) {
   teacherShortAnswerReview = null;
   teacherShortAnswerReviewTarget = { quizId, username };
   teacherShortAnswerReviewLoading = true;
+  teacherShortAnswerReviewDraft = {};
   app();
   try {
     teacherShortAnswerReview = await loadTeacherShortAnswerReview(quizId, username);
@@ -1494,6 +1504,8 @@ async function saveTeacherShortAnswerReview(event) {
   }
 
   teacherMutationInFlight = true;
+  teacherShortAnswerReviewSaving = true;
+  app();
   try {
     const { result } = await reviewTeacherShortAnswerResult(
       teacherShortAnswerReview.quiz_id,
@@ -1509,10 +1521,12 @@ async function saveTeacherShortAnswerReview(event) {
     }));
     teacherShortAnswerReview = null;
     teacherShortAnswerReviewTarget = null;
+    teacherShortAnswerReviewDraft = {};
     showToast('Teacher review saved. The result is final.');
   } catch (error) {
     showToast(`The teacher review could not be saved: ${error.message || error}`, 'error');
   } finally {
+    teacherShortAnswerReviewSaving = false;
     teacherMutationInFlight = false;
     app();
   }
@@ -1522,8 +1536,18 @@ document.addEventListener('click', event => {
   if (event.target.closest('[data-action="close-short-answer-review"]') && !teacherMutationInFlight) {
     teacherShortAnswerReview = null;
     teacherShortAnswerReviewTarget = null;
+    teacherShortAnswerReviewDraft = {};
     app();
   }
+});
+
+document.addEventListener('input', event => {
+  const input = event.target.closest('#teacher-short-answer-review-form [data-question-id]');
+  if (!input) return;
+  teacherShortAnswerReviewDraft = {
+    ...teacherShortAnswerReviewDraft,
+    [input.dataset.questionId]: input.value
+  };
 });
 
 document.addEventListener('submit', event => {
