@@ -265,6 +265,9 @@ function normalizeAttempt(row) {
     totalMarks: Number(row.total_marks) || 0,
     percentage: Number(row.percentage) || 0,
     durationMinutes: Number(row.duration_minutes) || 0,
+    reviewStatus: row.review_status === 'provisional' ? 'provisional' : 'final',
+    reviewedAt: row.reviewed_at || null,
+    reviewedBy: row.reviewed_by || null,
     completedAt: row.completed_at
   };
 }
@@ -323,8 +326,56 @@ export async function persistStudentQuizResult(result, studentSession) {
   return normalizeAttempt({
     ...data.result,
     total_marks: data.result.total_marks ?? data.result.totalMarks,
+    review_status: data.result.review_status,
+    reviewed_at: data.result.reviewed_at,
+    reviewed_by: data.result.reviewed_by,
     completed_at: data.result.completed_at ?? data.result.completedAt
   });
+}
+
+export async function loadTeacherShortAnswerReview(quizId, username) {
+  if (!quizId || !username) throw new Error('Select a student result before reviewing answers.');
+  const { data, error } = await withTimeout(
+    supabase.rpc('load_teacher_short_answer_review', {
+      p_quiz_id: String(quizId),
+      p_username: String(username)
+    }),
+    'Teacher short-answer review loading'
+  );
+  if (error) throw error;
+  if (!Array.isArray(data?.question_details)) {
+    throw new Error('Supabase returned an invalid short-answer review.');
+  }
+  return data;
+}
+
+export async function reviewTeacherShortAnswerResult(quizId, username, marks) {
+  if (!quizId || !username || !Array.isArray(marks)) {
+    throw new Error('Student result and reviewed marks are required.');
+  }
+  const { data, error } = await withTimeout(
+    supabase.rpc('review_teacher_short_answer_result', {
+      p_quiz_id: String(quizId),
+      p_username: String(username),
+      p_short_answer_marks: marks
+    }),
+    'Teacher short-answer result finalization'
+  );
+  if (error) throw error;
+  if (!data?.saved || !data.result || !data.report) {
+    throw new Error('Supabase did not confirm the teacher-reviewed result.');
+  }
+  return {
+    result: normalizeAttempt({
+      ...data.result,
+      total_marks: data.result.total_marks,
+      review_status: data.result.review_status,
+      reviewed_at: data.result.reviewed_at,
+      reviewed_by: data.result.reviewed_by,
+      completed_at: data.result.completed_at
+    }),
+    report: data.report
+  };
 }
 
 export async function loadStudentQuizReport(username, password, quizId) {

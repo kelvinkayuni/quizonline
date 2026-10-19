@@ -3,13 +3,18 @@ function studentCourseDetails() { const courseName = courseDisplayValue(state.co
 import { supabase } from './supabase.js';
 import { extractCartographerFile, insertCartographerDirectionalRelation, insertCartographerDocument, insertCartographerGlossaryEntry, insertCartographerNonSimilarPair, listCartographerCoordinates, listCartographerDirectionalRelations, listCartographerDocuments, listCartographerGlossary, listCartographerNonSimilarPairs, removeCartographerDirectionalRelation, removeCartographerDocument, removeCartographerGlossaryEntry, saveCartographerCoordinates } from './semanticCorpus.js';
 import { areSemanticWordPairsEqual, compareDirectionalText, compareSemanticText, createSemanticMap, extractDirectionalRelationCandidates, isGlossaryVariantCanonicalPair, normalizeCorpusText, normalizeDirectionalAction, normalizeSemanticWord, tokenizeSemanticText, trainSemanticModel } from './semanticModel.js';
-import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, deleteTeacherQuizQuestionHistory, hydrateQuizState, listTeacherQuizQuestionHistory, loadStudentQuizReport, loadStudentQuizResult, loadTeacherQuizQuestionHistory, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizConfiguration, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAccessChange, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt, waitForPendingQuestionSaves } from './supabaseStore.js';
+import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, deleteTeacherQuizQuestionHistory, hydrateQuizState, listTeacherQuizQuestionHistory, loadStudentQuizReport, loadStudentQuizResult, loadTeacherQuizQuestionHistory, loadTeacherShortAnswerReview, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizConfiguration, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAccessChange, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt, reviewTeacherShortAnswerResult, waitForPendingQuestionSaves } from './supabaseStore.js';
 import { loadStudentPresence, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { SHORT_ANSWER_FULL_CREDIT_THRESHOLD, roundToOneDecimal, shortAnswerMarksAwarded, shortAnswerMatchScore } from './shortAnswerMatching.js';
 import { semanticCartographerMarksAwarded } from './semanticCartographerScoring.js';
+import { prepareShortAnswerReviewMarks } from './shortAnswerReview.js';
 import { assignUniqueStudentQuestionOrders } from './studentQuestionOrders.js';
 import { ensureQuestionPersistenceId, getPublishedQuestionSnapshot } from './questionPersistence.js';
 let shortAnswerSubmissionInProgress = false;
+let teacherShortAnswerReview = null;
+let teacherShortAnswerReviewTarget = null;
+let teacherShortAnswerReviewLoading = false;
+let lastProvisionalResultRefreshAt = 0;
 
 async function refreshStudentQuizState() {
   if (!session || session.role !== 'student') return;
@@ -601,7 +606,7 @@ function navButton(iconName, label, target, active) { return `<button class="${t
 function timeGreeting() { const hour = new Date().getHours(); if (hour >= 5 && hour < 12) return 'Good morning'; if (hour >= 12 && hour < 17) return 'Good afternoon'; if (hour >= 17 && hour < 21) return 'Good evening'; return 'Good night'; }
 function viewTitle(view) { return ({ overview: `${timeGreeting()}, Kelvin.`, questions: 'Question bank', config: 'Quiz configuration', users: 'Student access', results: 'Results & monitoring', cartographer: 'Semantic Cartographer' }[view]); }
 function viewDescription(view) { return ({ overview: 'A live view of your assessment workspace.', questions: 'Build reusable questions with flexible scoring.', config: 'Set the rules, timing, and availability window.', users: 'Import and manage student login credentials.', results: 'Track participation and export completed work.', cartographer: 'Build a course corpus and explore its semantic relationships.' }[view]); }
-function viewContent(view) { const content = ({ overview: overviewView, questions: questionsView, config: configView, users: usersView, results: resultsView, cartographer: cartographerView }[view])(); return view === 'results' ? `${content}${resultFileSelectionPanel()}` : content; }
+function viewContent(view) { const content = ({ overview: overviewView, questions: questionsView, config: configView, users: usersView, results: resultsView, cartographer: cartographerView }[view])(); return view === 'results' ? `${content}${resultFileSelectionPanel()}${teacherShortAnswerReviewQueue()}${teacherShortAnswerReviewPanel()}` : content; }
 function cartographerView() {
   const model = cartographerModel;
   const map = model ? createSemanticMap(model, 60, cartographerCoordinates, cartographerSignature) : { nodes: [], edges: [] };
@@ -1441,10 +1446,100 @@ function resultsView() {
   const health = healthResults();
   const resultRows = selectedRows.map(result => {
     const quizId = result.quizId || fileQuizId || 'Not recorded';
-    return `<tr><td>${esc(quizId)}</td><td><strong>${esc(result.username)}</strong></td><td>${result.attempted}</td><td>${result.incorrect}</td><td>${result.score}/${result.totalMarks}</td><td><strong>${result.percentage}%</strong></td><td><span class="badge">Completed</span></td></tr>`;
+    const reviewPending = result.reviewStatus === 'provisional';
+    return `<tr><td>${esc(quizId)}</td><td><strong>${esc(result.username)}</strong></td><td>${result.attempted}</td><td>${result.incorrect}</td><td>${result.score}/${result.totalMarks}</td><td><strong>${result.percentage}%</strong></td><td><span class="badge">${reviewPending ? 'Review pending' : 'Final'}</span>${reviewPending ? `<button class="btn btn-secondary btn-small" data-action="open-short-answer-review" data-quiz-id="${esc(quizId)}" data-username="${esc(result.username)}">Review answers</button>` : ''}</td></tr>`;
   }).join('');
   return `<section class="card panel"><div class="panel-head"><div><h2>Quiz result files</h2><p class="subtle">Open a stored quiz workbook here or download it for sharing.</p></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end"><button class="btn btn-secondary btn-small" data-action="clear-result-files" ${state.resultFiles.length ? '' : 'disabled'}>Clear history</button>${file ? `<button class="btn btn-coral btn-small" data-action="delete-result-file">Delete selected</button><button class="btn btn-secondary btn-small" data-action="open-result">Open in system</button><button class="btn btn-primary btn-small" data-action="download-results">${icon('download')} Download</button>` : ''}</div></div>${state.resultFiles.length ? `<div class="result-history-toolbar"><div class="file-selector"><label class="eyebrow">Select quiz file</label><select id="result-file-select">${state.resultFiles.map(item => `<option value="${item.id}" ${item.id === file.id ? 'selected' : ''}>${esc(item.name)} · ${formatDate(item.createdAt)}</option>`).join('')}</select>${fileQuizId ? `<p class="subtle">Quiz ID: <strong>${esc(fileQuizId)}</strong></p>` : ''}</div><button class="btn btn-secondary btn-small" data-action="view-question-history">${questionHistoryVisible ? 'Hide quiz history' : 'View quiz history'}</button></div><div class="table-wrap"><table><thead><tr><th>Quiz ID</th><th>Student username</th><th>Attempted</th><th>Incorrect</th><th>Total marks</th><th>Percentage</th><th>Status</th></tr></thead><tbody>${resultRows}</tbody></table></div>` : `<div class="result-history-toolbar"><div class="empty">No quiz result files yet. Completed quizzes will be stored here automatically.</div><button class="btn btn-secondary btn-small" data-action="view-question-history">${questionHistoryVisible ? 'Hide quiz history' : 'View quiz history'}</button></div>`}${teacherQuestionHistoryPanel()}</section><section class="grid two-col" style="margin-top:17px"><div class="card panel"><div class="panel-head"><div><h2>Live monitoring</h2><p class="subtle">Active quiz sessions</p></div><span class="badge">${state.users.filter(user => user.status === 'online').length} online</span></div>${liveStudents()}</div><div class="card panel"><div class="panel-head"><div><h2>Assessment health</h2><p class="subtle">Completion overview</p></div><button class="btn btn-secondary btn-small" data-action="clear-health" ${health.length ? '' : 'disabled'}>Clear health</button></div><div style="display:flex;align-items:baseline;gap:8px;margin:16px 0 10px"><strong style="font-size:33px;letter-spacing:-.07em">${health.length}</strong><span class="subtle">completed</span></div><div class="progress"><span style="width:${state.users.length ? Math.min(100, health.length / state.users.length * 100) : 0}%"></span></div></div></section>`;
 }
+function teacherShortAnswerReviewQueue() {
+  const pendingResults = state.results.filter(result => result.reviewStatus === 'provisional');
+  return `<section class="card panel short-answer-review-queue"><div class="panel-head"><div><h2>Short-answer review</h2><p class="subtle">${pendingResults.length} provisional result${pendingResults.length === 1 ? '' : 's'}</p></div></div>${pendingResults.length ? `<div class="activity">${pendingResults.map(result => `<div class="activity-item"><span><strong>${esc(result.username)}</strong><br><span class="subtle">${esc(result.quizId || 'Quiz')} · Suggested total ${result.score}/${result.totalMarks}</span></span><button class="btn btn-secondary btn-small" data-action="open-short-answer-review" data-quiz-id="${esc(result.quizId || '')}" data-username="${esc(result.username)}" ${teacherMutationInFlight ? 'disabled' : ''}>Review answers</button></div>`).join('')}</div>` : '<div class="empty">No short-answer results are waiting for review.</div>'}</section>`;
+}
+
+function teacherShortAnswerReviewPanel() {
+  if (teacherShortAnswerReviewLoading && teacherShortAnswerReviewTarget) {
+    return '<section class="card panel short-answer-review-panel"><p class="subtle">Loading submitted answers...</p></section>';
+  }
+  if (!teacherShortAnswerReview) return '';
+  const details = teacherShortAnswerReview.question_details.filter(detail => detail.questionType === 'short-answer' && detail.submitted);
+  return `<section class="card panel short-answer-review-panel"><div class="panel-head"><div><h2>Review ${esc(teacherShortAnswerReview.username)}</h2><p class="subtle">${esc(teacherShortAnswerReview.quiz_id)} · Provisional ${teacherShortAnswerReview.score}/${teacherShortAnswerReview.total_marks}</p></div><button class="btn btn-secondary btn-small" data-action="close-short-answer-review">Close</button></div><form id="teacher-short-answer-review-form">${details.map(detail => `<article class="short-answer-review-item"><div class="eyebrow">Question ${detail.questionNumber} · ${detail.marksPossible} marks</div><h3>${esc(detail.questionText)}</h3>${detail.teacherExpectedAnswer ? `<p><strong>Expected concepts</strong><br>${esc(detail.teacherExpectedAnswer)}</p>` : ''}${detail.teacherReferenceAnswer ? `<p><strong>Teacher reference answer</strong><br>${esc(detail.teacherReferenceAnswer)}</p>` : ''}<p><strong>Student answer</strong><br>${esc(detail.studentAnswer || 'No answer recorded')}</p><p class="subtle">Cartographer suggested ${detail.suggestedMarksAwarded ?? detail.marksAwarded}/${detail.marksPossible}${detail.semanticSimilarity == null ? '' : ` · similarity ${detail.semanticSimilarity}% · coverage ${detail.semanticCoverage}%`}</p><div class="field"><label for="teacher-review-${esc(detail.questionId)}">Teacher marks</label><input id="teacher-review-${esc(detail.questionId)}" name="marksAwarded" data-question-id="${esc(detail.questionId)}" type="number" min="0" max="${Number(detail.marksPossible)}" step="0.1" value="${Number(detail.teacherMarksAwarded ?? detail.marksAwarded) || 0}" required ${teacherMutationInFlight ? 'disabled' : ''}></div></article>`).join('')}<button class="btn btn-primary" type="submit" ${teacherMutationInFlight || !details.length ? 'disabled' : ''}>${teacherMutationInFlight ? 'Saving review...' : 'Save review and finalize result'}</button></form></section>`;
+}
+
+async function openTeacherShortAnswerReview(quizId, username) {
+  if (session?.role !== 'teacher' || teacherMutationInFlight || !quizId || !username) return;
+  teacherMutationInFlight = true;
+  teacherShortAnswerReview = null;
+  teacherShortAnswerReviewTarget = { quizId, username };
+  teacherShortAnswerReviewLoading = true;
+  app();
+  try {
+    teacherShortAnswerReview = await loadTeacherShortAnswerReview(quizId, username);
+  } catch (error) {
+    teacherShortAnswerReviewTarget = null;
+    showToast(`The submitted answers could not be loaded: ${error.message || error}`, 'error');
+  } finally {
+    teacherShortAnswerReviewLoading = false;
+    teacherMutationInFlight = false;
+    app();
+  }
+}
+
+async function saveTeacherShortAnswerReview(event) {
+  event.preventDefault();
+  if (session?.role !== 'teacher' || teacherMutationInFlight || !teacherShortAnswerReview) return;
+  const entries = [...event.target.querySelectorAll('[data-question-id]')].map(input => ({
+    questionId: input.dataset.questionId,
+    marksAwarded: input.value
+  }));
+  let marks;
+  try {
+    marks = prepareShortAnswerReviewMarks(teacherShortAnswerReview.question_details, entries);
+  } catch (error) {
+    return showToast(error.message || String(error), 'error');
+  }
+
+  teacherMutationInFlight = true;
+  try {
+    const { result } = await reviewTeacherShortAnswerResult(
+      teacherShortAnswerReview.quiz_id,
+      teacherShortAnswerReview.username,
+      marks
+    );
+    const matchesResult = item => item.username === result.username && item.quizId === result.quizId;
+    state.results = state.results.map(item => matchesResult(item) ? result : item);
+    state.studentHistory = state.studentHistory.map(item => matchesResult(item) ? result : item);
+    state.resultFiles = state.resultFiles.map(file => ({
+      ...file,
+      rows: (file.rows || []).map(item => matchesResult(item) ? result : item)
+    }));
+    teacherShortAnswerReview = null;
+    teacherShortAnswerReviewTarget = null;
+    showToast('Teacher review saved. The result is final.');
+  } catch (error) {
+    showToast(`The teacher review could not be saved: ${error.message || error}`, 'error');
+  } finally {
+    teacherMutationInFlight = false;
+    app();
+  }
+}
+
+document.addEventListener('click', event => {
+  const reviewButton = event.target.closest('[data-action="open-short-answer-review"]');
+  if (reviewButton) {
+    void openTeacherShortAnswerReview(reviewButton.dataset.quizId, reviewButton.dataset.username);
+    return;
+  }
+  if (event.target.closest('[data-action="close-short-answer-review"]') && !teacherMutationInFlight) {
+    teacherShortAnswerReview = null;
+    teacherShortAnswerReviewTarget = null;
+    app();
+  }
+});
+
+document.addEventListener('submit', event => {
+  if (event.target.id === 'teacher-short-answer-review-form') void saveTeacherShortAnswerReview(event);
+});
+
 function studentApp() {
   if (session.completed) return studentResult();
   const availableQuestions = state.questionsPublished ? state.questions : [];
@@ -1557,7 +1652,40 @@ async function startStudentQuiz() {
 function studentAccountWithoutQuiz() { const history = state.studentHistory.filter(item => item.username === session.username); return `<main class="main"><div class="quiz-shell"><div class="quiz-top"><div><div class="brand"><span class="brand-mark">OQ</span><strong>ONLINE QUIZ</strong></div><p class="subtle" style="margin:14px 0 0">${esc(session.username)} · Student account</p></div><div class="student-actions"><button class="btn btn-secondary btn-small" data-action="logout">Sign out</button><button class="btn btn-secondary btn-small" data-action="view-student-history">View quiz history</button><button class="btn btn-secondary btn-small" data-action="download-student-history" ${history.length ? '' : 'disabled'}>Download history</button></div></div><section class="card result-hero"><div class="eyebrow kicker">No active assessment</div><h2>Your student account is ready.</h2><p class="subtle">There is no quiz available right now. You can still review your previous quiz history below.</p>${studentSchedule()}</section><section class="card panel student-history-panel" id="student-history-panel"><div class="panel-head"><div><h2>Quiz history</h2><p class="subtle">Your records can be viewed or downloaded, but not deleted.</p></div></div>${studentHistoryTable(history)}</section></div></main>`; }
 function studentSchedule() { const config = state.config; const courseName = courseDisplayValue(config.courseName); const courseCode = courseDisplayValue(config.courseCode); return `${courseName || courseCode ? `<div style="margin:24px 0 0;text-align:left">${courseName ? `<h3 style="margin:7px 0 0">${esc(courseName)}</h3>` : ''}${courseCode ? `<span class="badge">${esc(courseCode)}</span>` : ''}</div>` : ''}<div class="grid" style="grid-template-columns:repeat(3,1fr);gap:12px;margin:24px 0 0;text-align:left"><div><div class="eyebrow">Starts</div><strong style="display:block;margin-top:7px">${config.start ? esc(formatDate(config.start)) : 'Not scheduled'}</strong></div><div><div class="eyebrow">Ends</div><strong style="display:block;margin-top:7px">${config.end ? esc(formatDate(config.end)) : 'No deadline'}</strong></div><div><div class="eyebrow">Time limit</div><strong style="display:block;margin-top:7px">${config.duration ? `${config.duration} minutes` : 'Not set'}</strong></div></div>`; }
 function studentResult() { const result = session.result || state.results.find(item => item.username === session.username); const history = state.studentHistory.filter(item => item.username === session.username); const percentage = result?.percentage ?? 0; const passed = percentage >= 50; const pending = Boolean(session.resultSyncPending); return `<main class="main"><div class="quiz-shell"><div class="quiz-top"><div class="brand"><span class="brand-mark">OQ</span><strong>ONLINE QUIZ</strong></div><div class="student-actions"><button class="btn btn-secondary btn-small" data-action="view-student-history">View student history</button><button class="btn btn-secondary btn-small" data-action="download-student-history" ${history.length ? '' : 'disabled'}>Download history</button>${pending ? '' : '<button class="btn btn-secondary btn-small" data-action="logout">Sign out</button>'}</div></div><section class="card result-hero"><div class="eyebrow kicker">${pending ? 'Submission not confirmed' : 'Assessment complete'}</div><div class="score-big">${percentage}%</div><h2>${passed ? 'WELL DONE' : 'NOT GOOD'}, ${esc(session.username)}.</h2><p class="subtle">${pending ? `Supabase has not confirmed this result yet. Keep this page open and retry the save; do not start this quiz again on another device until confirmation. ${esc(session.resultSyncError || '')}` : 'Your answers have been recorded. This attempt is final and cannot be retaken.'}</p>${pending ? '<button class="btn btn-primary" data-action="retry-result-save">Retry result save</button>' : ''}<div class="grid" style="grid-template-columns:repeat(3,1fr);margin:30px 0;text-align:left"><div><div class="eyebrow">Score</div><strong>${result ? result.score : 0}/${result ? result.totalMarks : 0}</strong></div><div><div class="eyebrow">Attempted</div><strong>${result ? result.attempted : 0}</strong></div><div><div class="eyebrow">Incorrect</div><strong>${result ? result.incorrect : 0}</strong></div></div></section><section class="card panel student-history-panel" id="student-history-panel"><div class="panel-head"><div><h2>Quiz history</h2><p class="subtle">Your records can be viewed or downloaded, but not deleted.</p></div></div>${studentHistoryTable(history)}</section></div></main>`; }
-function studentHistoryTable(history) { if (!history.length) return '<div class="empty">No completed quiz history yet.</div>'; return `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Quiz</th><th>Duration</th><th>Attempted</th><th>Right</th><th>Wrong</th><th>Marks scored</th><th>Report</th></tr></thead><tbody>${history.map(item => `<tr><td>${formatDate(item.completedAt)}</td><td>${esc(item.quizId || 'Not recorded')}</td><td>${item.durationMinutes || 0} min</td><td>${item.attempted}</td><td>${item.correct ?? Math.max(0, item.attempted - item.incorrect)}</td><td>${item.incorrect}</td><td><strong>${item.score}/${item.totalMarks}</strong></td><td><button class="btn btn-secondary btn-small" data-action="download-quiz-report" data-quiz-id="${esc(item.quizId || '')}" ${item.quizId ? '' : 'disabled'}>Download report</button></td></tr>`).join('')}</tbody></table></div>`; }
+const studentResultWithoutReviewStatus = studentResult;
+studentResult = function renderStudentResultReviewStatus() {
+  const content = studentResultWithoutReviewStatus();
+  const result = session?.result || state.results.find(item => item.username === session?.username);
+  if (result?.reviewStatus !== 'provisional' || session?.resultSyncPending) return content;
+  return content
+    .replace('Assessment complete', 'Provisional result · awaiting teacher review')
+    .replace('Your answers have been recorded. This attempt is final and cannot be retaken.', 'Your answers have been recorded. Marks may change after teacher review.');
+};
+
+function studentHistoryTable(history) { if (!history.length) return '<div class="empty">No completed quiz history yet.</div>'; return `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Quiz</th><th>Duration</th><th>Attempted</th><th>Right</th><th>Wrong</th><th>Marks scored</th><th>Review status</th><th>Report</th></tr></thead><tbody>${history.map(item => `<tr><td>${formatDate(item.completedAt)}</td><td>${esc(item.quizId || 'Not recorded')}</td><td>${item.durationMinutes || 0} min</td><td>${item.attempted}</td><td>${item.correct ?? Math.max(0, item.attempted - item.incorrect)}</td><td>${item.incorrect}</td><td><strong>${item.score}/${item.totalMarks}</strong></td><td><span class="badge">${item.reviewStatus === 'provisional' ? 'Review pending' : 'Final'}</span></td><td><button class="btn btn-secondary btn-small" data-action="download-quiz-report" data-quiz-id="${esc(item.quizId || '')}" ${item.quizId ? '' : 'disabled'}>Download report</button></td></tr>`).join('')}</tbody></table></div>`; }
+async function refreshProvisionalStudentResult() {
+  if (session?.role !== 'student' || !session.completed || session.result?.reviewStatus !== 'provisional') return;
+  try {
+    const result = await loadStudentQuizResult(session.username, session.quizId);
+    if (!result || result.reviewStatus !== 'final') return;
+    session.result = result;
+    session.answers = result.answers;
+    session.resultSyncPending = false;
+    session.resultSyncError = '';
+    state.results = state.results.map(item => item.username === result.username && item.quizId === result.quizId ? result : item);
+    state.studentHistory = state.studentHistory.map(item => item.username === result.username && item.quizId === result.quizId ? result : item);
+    state.resultFiles = state.resultFiles.map(file => ({
+      ...file,
+      rows: (file.rows || []).map(item => item.username === result.username && item.quizId === result.quizId ? result : item)
+    }));
+    saveWindowSession();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
+    showToast('Your teacher has finalized this result.');
+    app();
+  } catch {
+    return;
+  }
+}
 function formatTime(totalSeconds) { const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0'); const seconds = Math.max(0, totalSeconds % 60).toString().padStart(2, '0'); return `${minutes}:${seconds}`; }
 function addActivity(text, type = 'book', options = {}) { state.activity.unshift({ text, type, time: new Date().toISOString() }); state.activity = state.activity.slice(0, 20); saveState(options); }
 async function persistQuizControlState() { if (state.questionsPublished && state.currentQuizId) return; const result = await supabase.from('quiz_config').upsert({ id: 1, course_name: state.config.courseName || null, course_code: state.config.courseCode || null, total_questions: state.config.totalQuestions, duration: state.config.duration, start_time: state.config.start ? new Date(state.config.start).toISOString() : null, end_time: state.config.end ? new Date(state.config.end).toISOString() : null, quiz_id: state.currentQuizId, published: state.questionsPublished, stopped: state.quizStopped }); if (result.error) throw result.error; }
@@ -1764,6 +1892,11 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
   }
   if (session?.role === 'student') {
     studentQuizRefreshTimer = setInterval(async () => {
+      if (session?.completed && session.result?.reviewStatus === 'provisional'
+        && Date.now() - lastProvisionalResultRefreshAt >= 15000) {
+        lastProvisionalResultRefreshAt = Date.now();
+        await refreshProvisionalStudentResult();
+      }
       const accessResult = await supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle();
       const accessData = accessResult.data?.data;
       const hasStudentAccess = !accessResult.error
@@ -2857,8 +2990,8 @@ async function clearRecentActivity() {
     app();
   }
 }
-function downloadResults() { if (!window.XLSX) return; const file = state.resultFiles.find(item => item.id === selectedResultFileId) || state.resultFiles[0]; const results = file?.rows || state.results; if (!results.length) return; const fileQuizId = file?.id?.startsWith('quiz-') ? file.id.slice(5) : ''; const rows = [['Quiz ID', 'Student username', 'Number of questions attempted', 'Number answered incorrectly', 'Total marks obtained', 'Percentage score'], ...results.map(result => [result.quizId || fileQuizId || 'Not recorded', result.username, result.attempted, result.incorrect, result.score, `${result.percentage}%`])]; const sheet = XLSX.utils.aoa_to_sheet(rows); const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, 'Results'); XLSX.writeFile(book, `${file?.name || 'online-quiz-results'}.xlsx`); showToast('Results workbook downloaded.'); }
-function downloadStudentHistory() { if (!window.XLSX || !session) return; const history = state.studentHistory.filter(item => item.username === session.username); if (!history.length) return; const rows = [['Date', 'Duration (minutes)', 'Questions attempted', 'Questions right', 'Questions wrong', 'Marks scored', 'Total marks'], ...history.map(item => [formatDate(item.completedAt), item.durationMinutes, item.attempted, item.correct, item.incorrect, item.score, item.totalMarks])]; const sheet = XLSX.utils.aoa_to_sheet(rows); const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, 'Quiz history'); XLSX.writeFile(book, `${session.username}-quiz-history.xlsx`); showToast('Your quiz history was downloaded.'); }
+function downloadResults() { if (!window.XLSX) return; const file = state.resultFiles.find(item => item.id === selectedResultFileId) || state.resultFiles[0]; const results = file?.rows || state.results; if (!results.length) return; const fileQuizId = file?.id?.startsWith('quiz-') ? file.id.slice(5) : ''; const rows = [['Quiz ID', 'Student username', 'Number of questions attempted', 'Number answered incorrectly', 'Total marks obtained', 'Percentage score', 'Review status'], ...results.map(result => [result.quizId || fileQuizId || 'Not recorded', result.username, result.attempted, result.incorrect, result.score, `${result.percentage}%`, result.reviewStatus === 'provisional' ? 'Pending teacher review' : 'Final'])]; const sheet = XLSX.utils.aoa_to_sheet(rows); const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, 'Results'); XLSX.writeFile(book, `${file?.name || 'online-quiz-results'}.xlsx`); showToast('Results workbook downloaded.'); }
+function downloadStudentHistory() { if (!window.XLSX || !session) return; const history = state.studentHistory.filter(item => item.username === session.username); if (!history.length) return; const rows = [['Date', 'Duration (minutes)', 'Questions attempted', 'Questions right', 'Questions wrong', 'Marks scored', 'Total marks', 'Review status'], ...history.map(item => [formatDate(item.completedAt), item.durationMinutes, item.attempted, item.correct, item.incorrect, item.score, item.totalMarks, item.reviewStatus === 'provisional' ? 'Pending teacher review' : 'Final'])]; const sheet = XLSX.utils.aoa_to_sheet(rows); const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, 'Quiz history'); XLSX.writeFile(book, `${session.username}-quiz-history.xlsx`); showToast('Your quiz history was downloaded.'); }
 async function downloadStudentQuizReport(quizId, button) {
   if (session?.role !== 'student' || !quizId) return showToast('Select a completed quiz before downloading its report.', 'error');
   const student = state.users.find(user => user.username === session.username);
@@ -2897,6 +3030,7 @@ async function downloadStudentQuizReport(quizId, button) {
     addText(`Student: ${report.username}`);
     addText(`Quiz: ${report.quiz_id}`);
     addText(`Completed: ${formatDate(report.completed_at)}`);
+    addText(`Review status: ${report.review_status === 'provisional' ? 'Pending teacher review' : 'Final'}`);
     addText(`Overall score: ${report.score}/${report.total_marks} (${report.percentage}%)`, { bold: true });
     pdf.setDrawColor(23, 107, 99);
     pdf.setLineWidth(0.7);

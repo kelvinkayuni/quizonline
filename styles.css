@@ -161,6 +161,13 @@ tr:last-child td { border: 0; }
 .student-actions .timer { order: -2; text-align: center; }
 .assessment-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
 .student-history-panel { margin-top: 17px; text-align: left; }
+.short-answer-review-queue, .short-answer-review-panel { margin-top: 17px; text-align: left; }
+.short-answer-review-queue .activity-item { align-items: center; }
+.short-answer-review-item { padding: 18px 0; border-top: 1px solid var(--line); }
+.short-answer-review-item h3 { margin: 8px 0 15px; overflow-wrap: anywhere; }
+.short-answer-review-item p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.short-answer-review-item .field { max-width: 260px; }
+[data-action="open-short-answer-review"] { margin-left: 8px; white-space: nowrap; }
 .quiz-question-history-list { gap: 0; }
 .quiz-question-history-item { grid-template-columns: minmax(0, 1fr) auto; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--line); }
 .quiz-question-history-item:last-child { border-bottom: 0; }
