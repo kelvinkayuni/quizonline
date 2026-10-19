@@ -22,7 +22,6 @@ export function getAttemptConflictReason(localAttempt, remoteAttempt) {
   if (localIndex === remoteIndex) {
     if (remoteAttempt.selected != null && localAttempt.selected !== remoteAttempt.selected) return 'selection_mismatch';
     if (remoteAttempt.response && !String(localAttempt.response || '').startsWith(remoteAttempt.response)) return 'response_mismatch';
-    if (remoteAttempt.feedback && JSON.stringify(localAttempt.feedback) !== JSON.stringify(remoteAttempt.feedback)) return 'feedback_mismatch';
   }
   return null;
 }

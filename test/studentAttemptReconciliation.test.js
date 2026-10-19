@@ -41,8 +41,18 @@ test('answer history ignores object key order but preserves values and array ord
   ), 'answer_history_mismatch');
 });
 
-test('reconciliation identifies current answer and feedback mismatches without exposing answer text', () => {
+test('reconciliation identifies current answer mismatches without exposing answer text', () => {
   assert.equal(getAttemptConflictReason({ ...matchingAttempt, selected: 1 }, { ...matchingAttempt, selected: 0 }), 'selection_mismatch');
   assert.equal(getAttemptConflictReason({ ...matchingAttempt, response: 'different text' }, { ...matchingAttempt, response: 'saved text' }), 'response_mismatch');
-  assert.equal(getAttemptConflictReason({ ...matchingAttempt, feedback: { correct: false } }, { ...matchingAttempt, feedback: { correct: true } }), 'feedback_mismatch');
+});
+
+test('feedback-only differences do not conflict, but submitted-answer differences do', () => {
+  assert.equal(getAttemptConflictReason(
+    { ...matchingAttempt, feedback: { correct: false, marksAwarded: 1 } },
+    { ...matchingAttempt, feedback: { correct: true, marksAwarded: 2 } }
+  ), null);
+  assert.equal(getAttemptConflictReason(
+    { ...matchingAttempt, answers: [{ questionId: 'q1', selected: 'response', marksAwarded: 1 }] },
+    { ...matchingAttempt, answers: [{ questionId: 'q1', selected: 'response', marksAwarded: 2 }] }
+  ), 'answer_history_mismatch');
 });
