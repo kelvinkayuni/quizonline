@@ -49,10 +49,14 @@ begin
     and attempt.reviewed_at is null
     and exists (
       select 1
-      from jsonb_array_elements(
-        case when jsonb_typeof(attempt.answers) = 'array' then attempt.answers else '[]'::jsonb end
-      ) as answer(value)
-      where answer.value->>'scoringMethod' in ('cartographer', 'concept-matcher-fallback')
+      from public.student_quiz_reports as report
+      cross join lateral jsonb_array_elements(
+        case when jsonb_typeof(report.question_details) = 'array' then report.question_details else '[]'::jsonb end
+      ) as detail(value)
+      where report.username = attempt.username
+        and report.quiz_id = attempt.quiz_id
+        and detail.value->>'questionType' = 'short-answer'
+        and detail.value->>'submitted' = 'true'
     );
 
   update public.student_quiz_reports as report
