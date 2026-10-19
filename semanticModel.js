@@ -231,6 +231,146 @@ function actionRoleVectorForText(text, glossary) {
   return vector;
 }
 
+const RELATION_EDGE_WORDS = new Set(['a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'can', 'could', 'may', 'might', 'must', 'shall', 'should', 'will', 'would', 'do', 'does', 'did', 'not', 'never', 'no', 'without', 'only', 'also', 'to', 'through', 'by', 'of', 'in', 'at', 'from', 'with', 'into', 'onto', 'for', 'as', 'than']);
+const PASSIVE_AUXILIARIES = new Set(['is', 'are', 'was', 'were', 'be', 'been', 'being']);
+
+function actionInflections(lemma) {
+  const forms = new Set([lemma]);
+  if (lemma.endsWith('y') && !/[aeiou]y$/u.test(lemma)) {
+    const stem = lemma.slice(0, -1);
+    forms.add(`${stem}ies`);
+    forms.add(`${stem}ied`);
+    forms.add(`${lemma}ing`);
+  } else if (lemma.endsWith('e')) {
+    forms.add(`${lemma}s`);
+    forms.add(`${lemma}d`);
+    forms.add(`${lemma.slice(0, -1)}ing`);
+  } else {
+    forms.add(`${lemma}s`);
+    forms.add(`${lemma}es`);
+    forms.add(`${lemma}ed`);
+    forms.add(`${lemma}ing`);
+  }
+  return forms;
+}
+
+const ACTION_FORM_TO_LEMMA = new Map();
+for (const lemma of APPROVED_ACTION_LEMMAS) {
+  for (const form of actionInflections(lemma)) ACTION_FORM_TO_LEMMA.set(form, lemma);
+}
+
+function relationEntityPhrase(text, side, glossary) {
+  const terms = tokenizeSemanticText(text, glossary).filter(term => !RELATION_EDGE_WORDS.has(term));
+  const selected = side === 'subject' ? terms.slice(-4) : terms.slice(0, 4);
+  return selected.join(' ');
+}
+
+function extractDirectionalRelation(sentence, document, glossary) {
+  const matches = [...String(sentence || '').matchAll(/[\p{L}][\p{L}\p{M}'’ʼ-]*/gu)];
+  const actions = matches.flatMap((match, index) => {
+    const token = normalizeSemanticWord(match[0], glossary);
+    const action = ACTION_FORM_TO_LEMMA.get(token);
+    const before = matches.slice(0, index).map(item => item[0]).join(' ');
+    const after = matches.slice(index + 1).map(item => item[0]).join(' ');
+    const hasEntity = text => tokenizeSemanticText(text, glossary).some(term => !RELATION_EDGE_WORDS.has(term));
+    return action && hasEntity(before) && hasEntity(after) ? [{ match, index, action }] : [];
+  });
+  if (actions.length !== 1) return null;
+
+  const { index, action } = actions[0];
+  const before = matches.slice(0, index).map(item => item[0]);
+  const after = matches.slice(index + 1).map(item => item[0]);
+  const auxiliary = normalizeSemanticWord(before.at(-1), glossary);
+  const passive = PASSIVE_AUXILIARIES.has(auxiliary) && normalizeSemanticWord(after[0], glossary) === 'by';
+  const subject = passive
+    ? relationEntityPhrase(after.slice(1).join(' '), 'object', glossary)
+    : relationEntityPhrase(before.join(' '), 'subject', glossary);
+  const object = passive
+    ? relationEntityPhrase(before.slice(0, -1).join(' '), 'subject', glossary)
+    : relationEntityPhrase(after.join(' '), 'object', glossary);
+  if (!subject || !object) return null;
+
+  const sourceText = String(sentence).trim();
+  const polarityText = sourceText.replace(/\bnot\s+only\b/giu, ' ');
+  return {
+    source_document_id: document?.id || null,
+    source_document_name: document?.name || '',
+    source_text: sourceText,
+    subject,
+    action,
+    object,
+    polarity: /\b(?:not|never|no|without)\b/iu.test(polarityText) ? -1 : 1
+  };
+}
+
+export function extractDirectionalRelationCandidates(documents, glossary = [], negationRules = [], maxCandidates = 250) {
+  const candidates = [];
+  const seen = new Set();
+  const glossaryMap = createGlossaryMap(glossary);
+  for (const document of documents || []) {
+    if (candidates.length >= maxCandidates) break;
+    const passages = String(document.text_content || '').split(/(?<=[.!?;])\s+|[\r\n]+/u);
+    for (const passage of passages) {
+      if (candidates.length >= maxCandidates) break;
+      const candidate = extractDirectionalRelation(expandNegationRules(passage, negationRules, glossaryMap), document, glossary);
+      if (!candidate) continue;
+      candidate.source_text = passage.trim();
+      const key = [candidate.source_document_id, candidate.source_text.toLowerCase(), candidate.subject, candidate.action, candidate.object].join('|');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push(candidate);
+    }
+  }
+  return candidates;
+}
+
+function normalizedRelationFrame(frame, glossary) {
+  const normalizePhrase = value => tokenizeSemanticText(value, glossary).join(' ');
+  const subject = normalizePhrase(frame?.subject || '');
+  const actionToken = normalizePhrase(frame?.action || '');
+  const action = ACTION_FORM_TO_LEMMA.get(actionToken) || '';
+  const object = normalizePhrase(frame?.object || '');
+  if (!subject || !action || !object) return null;
+  return { subject, action, object, polarity: Number(frame?.polarity) < 0 ? -1 : 1 };
+}
+
+export function normalizeDirectionalAction(value, glossary = []) {
+  const tokens = tokenizeSemanticText(value, glossary);
+  return tokens.length === 1 ? ACTION_FORM_TO_LEMMA.get(tokens[0]) || '' : '';
+}
+
+export function classifyDirectionalRelationFrames(frameA, frameB, glossary = []) {
+  const a = normalizedRelationFrame(frameA, glossary);
+  const b = normalizedRelationFrame(frameB, glossary);
+  if (!a || !b) return { status: 'uncertain', frameA: a, frameB: b };
+  if (a.action !== b.action) return { status: 'different', frameA: a, frameB: b };
+  if (a.subject === b.subject && a.object === b.object) {
+    return { status: a.polarity === b.polarity ? 'same-direction' : 'different', frameA: a, frameB: b };
+  }
+  if (a.subject === b.object && a.object === b.subject) {
+    return { status: a.polarity === b.polarity ? 'reversed-direction' : 'different', frameA: a, frameB: b };
+  }
+  return { status: 'different', frameA: a, frameB: b };
+}
+
+function normalizedRelationSource(text) {
+  return normalizedSurfaceForm(String(text || '')).toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim().replace(/\s+/gu, ' ');
+}
+
+function directionalFrameForText(text, glossary, negationRules, reviewedRelations) {
+  const normalizedSource = normalizedRelationSource(text);
+  const reviewed = (reviewedRelations || []).find(frame => normalizedRelationSource(frame.source_text) === normalizedSource);
+  if (reviewed) return reviewed;
+  const [candidate] = extractDirectionalRelationCandidates([{ text_content: String(text || '') }], glossary, negationRules);
+  return candidate;
+}
+
+export function compareDirectionalText(textA, textB, glossary = [], negationRules = [], reviewedRelations = []) {
+  const frameA = directionalFrameForText(textA, glossary, negationRules, reviewedRelations);
+  const frameB = directionalFrameForText(textB, glossary, negationRules, reviewedRelations);
+  return classifyDirectionalRelationFrames(frameA, frameB, glossary);
+}
+
 function comparisonContainsWord(text, word, glossary) {
   const words = String(text || '').normalize('NFKC').match(/[\p{L}][\p{L}\p{M}'’ʼ\-‐‑‒–—−]*/gu) || [];
   return words.some(candidate => normalizeSemanticWord(candidate, glossary) === word);

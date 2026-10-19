@@ -4,6 +4,7 @@ const TABLE = 'semantic_cartographer_documents';
 const GLOSSARY_TABLE = 'semantic_cartographer_glossary';
 const COORDINATES_TABLE = 'semantic_cartographer_coordinates';
 const NON_SIMILAR_PAIRS_TABLE = 'semantic_cartographer_non_similar_pairs';
+const DIRECTIONAL_RELATIONS_TABLE = 'semantic_cartographer_directional_relations';
 const MAX_FILE_BYTES = 12 * 1024 * 1024;
 
 export async function extractCartographerFile(file) {
@@ -56,6 +57,29 @@ export async function insertCartographerGlossaryEntry(entry) {
 
 export async function removeCartographerGlossaryEntry(id) {
   const { error } = await supabase.from(GLOSSARY_TABLE).delete().eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+export async function listCartographerDirectionalRelations() {
+  const { data, error } = await supabase.from(DIRECTIONAL_RELATIONS_TABLE)
+    .select('id, source_document_id, source_text, subject, action, object, polarity, created_at')
+    .order('created_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+export async function insertCartographerDirectionalRelation(relation) {
+  const { data, error } = await supabase.from(DIRECTIONAL_RELATIONS_TABLE).insert(relation)
+    .select('id, source_document_id, source_text, subject, action, object, polarity, created_at').single();
+  if (error) {
+    if (error.code === '23505') throw new Error('That source sentence already has a reviewed relation.');
+    throw new Error(error.message);
+  }
+  return data;
+}
+
+export async function removeCartographerDirectionalRelation(id) {
+  const { error } = await supabase.from(DIRECTIONAL_RELATIONS_TABLE).delete().eq('id', id);
   if (error) throw new Error(error.message);
 }
 

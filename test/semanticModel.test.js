@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { areSemanticWordPairsEqual, compareSemanticText, createSemanticMap, isGlossaryVariantCanonicalPair, normalizeCorpusText, normalizeSemanticWord, tokenizeSemanticText, trainSemanticModel } from '../semanticModel.js';
+import { areSemanticWordPairsEqual, classifyDirectionalRelationFrames, compareDirectionalText, compareSemanticText, createSemanticMap, extractDirectionalRelationCandidates, isGlossaryVariantCanonicalPair, normalizeCorpusText, normalizeDirectionalAction, normalizeSemanticWord, tokenizeSemanticText, trainSemanticModel } from '../semanticModel.js';
 
 test('semantic tokenization keeps negation and selected short terms but drops stopwords', () => {
   assert.deepEqual(
@@ -183,6 +183,48 @@ test('approved action roles add a conservative feature boost without replacing c
   assert.ok(result.roleBoost > 0.2);
   assert.ok(result.score >= result.baseScore);
   assert.ok(result.score > 0);
+});
+
+test('directional relation extraction captures active, passive, and reversed roles', () => {
+  const candidates = extractDirectionalRelationCandidates([{ id: 'course-1', name: 'Optics', text_content: 'Light enters the gemstone. The gemstone is entered by light.' }]);
+  assert.deepEqual(candidates.map(({ subject, action, object }) => ({ subject, action, object })), [
+    { subject: 'light', action: 'enter', object: 'gemstone' },
+    { subject: 'light', action: 'enter', object: 'gemstone' }
+  ]);
+  assert.equal(compareDirectionalText('Light enters the gemstone.', 'The gemstone enters light.').status, 'reversed-direction');
+  assert.equal(compareDirectionalText('Light enters the gemstone.', 'The gemstone is entered by light.').status, 'same-direction');
+  const additive = extractDirectionalRelationCandidates([{ text_content: 'Not only does heat cause expansion, but also growth.' }]);
+  assert.equal(additive[0].polarity, 1);
+});
+
+test('directional labels remain separate from the cosine score', () => {
+  const model = trainSemanticModel([{ text_content: 'Heat causes expansion. Expansion causes heat.' }]);
+  const original = compareSemanticText(model, 'heat causes expansion', 'expansion causes heat');
+  const direction = compareDirectionalText('heat causes expansion', 'expansion causes heat');
+  assert.equal(direction.status, 'reversed-direction');
+  assert.equal(compareSemanticText(model, 'heat causes expansion', 'expansion causes heat').score, original.score);
+});
+
+test('directional comparison reports uncertain when a frame cannot be extracted', () => {
+  assert.equal(compareDirectionalText('A transparent stone.', 'A clear mineral.').status, 'uncertain');
+  assert.equal(classifyDirectionalRelationFrames(null, null).status, 'uncertain');
+});
+
+test('directional candidate extraction respects its result limit', () => {
+  const candidates = extractDirectionalRelationCandidates([{ text_content: 'Light enters stone. Heat causes expansion. Pressure increases density.' }], [], [], 2);
+  assert.equal(candidates.length, 2);
+});
+
+test('directional actions normalize to the approved action inventory', () => {
+  assert.equal(normalizeDirectionalAction('causes'), 'cause');
+  assert.equal(normalizeDirectionalAction('caused'), 'cause');
+  assert.equal(normalizeDirectionalAction('causes heat'), '');
+});
+
+test('reviewed source frames override heuristic roles and respect polarity', () => {
+  const reviewed = [{ source_text: 'Heat causes expansion.', subject: 'heat', action: 'cause', object: 'expansion', polarity: 1 }];
+  assert.equal(compareDirectionalText('Heat causes expansion!', 'Expansion causes heat.', [], [], reviewed).status, 'reversed-direction');
+  assert.equal(compareDirectionalText('Heat causes expansion.', 'Heat does not cause expansion.').status, 'different');
 });
 
 test('teacher calibration pairs adjust final similarity in proportion to their sentence coverage', () => {
