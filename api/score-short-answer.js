@@ -99,8 +99,10 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Required scoring information is missing or invalid.' });
   }
 
+  let failureStage = 'supabase-client';
   try {
     const client = createServerClient();
+    failureStage = 'quiz-config-query';
     const config = await queryResult(client.from('quiz_config')
       .select('quiz_id, published, stopped, end_time')
       .eq('id', 1)
@@ -110,8 +112,10 @@ export default async function handler(req, res) {
       return res.status(409).json({ error: 'This quiz is no longer active.' });
     }
 
-    const [teacher, workspace, attempt] = await Promise.all([
-      loadTeacher(client),
+    failureStage = 'teacher-auth-lookup';
+    const teacher = await loadTeacher(client);
+    failureStage = 'attempt-validation';
+    const [workspace, attempt] = await Promise.all([
       queryResult(client.from('quiz_workspace').select('data').eq('id', 1).maybeSingle()),
       queryResult(client.from('quiz_active_attempts')
         .select('generation, owner_token, attempt_data')
@@ -136,14 +140,16 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'The requested question is not a published short-answer question.' });
     }
 
+    failureStage = 'semantic-model-load';
     const { model, negationRules, nonSimilarPairs } = await loadSemanticModel(client, teacher.id);
+    failureStage = 'semantic-comparison';
     const result = compareSemanticText(model, response, question.answer, negationRules, nonSimilarPairs);
     if (!Number.isFinite(result.score) || !Number.isFinite(result.coverage)) {
       throw new Error('Cartographer returned an invalid comparison.');
     }
     return res.status(200).json({ score: result.score, coverage: result.coverage });
   } catch (error) {
-    console.error('Protected Cartographer scoring failed:', error?.message || 'unknown error');
-    return res.status(503).json({ error: 'Cartographer scoring is unavailable.' });
+    console.error('Protected Cartographer scoring failed at', failureStage, ':', error?.message || 'unknown error');
+    return res.status(503).json({ error: 'Cartographer scoring is unavailable.', stage: failureStage });
   }
 }
