@@ -18,7 +18,12 @@ function createServerClient() {
 
 async function queryResult(request) {
   const { data, error } = await request;
-  if (error) throw error;
+  if (error) {
+    const queryError = new Error('Supabase query failed.');
+    queryError.safeCode = /^[A-Z0-9_]+$/.test(String(error.code || '')) ? error.code : '';
+    queryError.safeStatus = Number.isInteger(error.status) ? error.status : null;
+    throw queryError;
+  }
   return data;
 }
 
@@ -149,7 +154,11 @@ export default async function handler(req, res) {
     }
     return res.status(200).json({ score: result.score, coverage: result.coverage });
   } catch (error) {
-    console.error('Protected Cartographer scoring failed at', failureStage, ':', error?.message || 'unknown error');
-    return res.status(503).json({ error: 'Cartographer scoring is unavailable.', stage: failureStage });
+    const code = /^[A-Z0-9_]+$/.test(String(error?.safeCode || error?.code || ''))
+      ? String(error.safeCode || error.code)
+      : null;
+    const upstreamStatus = Number.isInteger(error?.safeStatus) ? error.safeStatus : null;
+    console.error('Protected Cartographer scoring failed at', failureStage, code || error?.name || 'unknown error', upstreamStatus || '');
+    return res.status(503).json({ error: 'Cartographer scoring is unavailable.', stage: failureStage, code, upstreamStatus });
   }
 }
