@@ -273,6 +273,7 @@ let persistenceTimer = null;
 let liveRefreshTimer = null;
 let teacherDeadlineTimer = null;
 let teacherMutationInFlight = false;
+let resultFileDeletionInFlight = false;
 let studentAccessAction = null;
 let teacherWorkspaceMutationVersion = 0;
 let studentHeartbeatTimer = null;
@@ -1332,7 +1333,7 @@ function resultFileSelectionPanel() {
   const availableFileIds = new Set(state.resultFiles.map(file => file.id));
   for (const fileId of selectedResultFileIds) if (!availableFileIds.has(fileId)) selectedResultFileIds.delete(fileId);
   const selectedCount = state.resultFiles.filter(file => selectedResultFileIds.has(file.id)).length;
-  return `<div class="result-file-selection-control"><details class="result-file-select-menu" ${resultFileSelectionMenuOpen ? 'open' : ''}><summary data-action="result-file-selection-summary">Select result files (${selectedCount} selected)</summary><div class="result-file-select-options">${state.resultFiles.map(file => `<label class="result-file-choice"><input type="checkbox" data-action="select-result-file" data-file-id="${esc(file.id)}" aria-label="Select ${esc(file.name)}" ${selectedResultFileIds.has(file.id) ? 'checked' : ''} ${teacherMutationInFlight ? 'disabled' : ''}><span><strong>${esc(file.name)}</strong><span class="subtle">${formatDate(file.createdAt)} · ${(file.rows || []).length} results</span></span></label>`).join('')}</div></details><button type="button" class="btn btn-coral btn-small" data-action="delete-selected-result-files" ${selectedCount > 1 && !teacherMutationInFlight ? '' : 'disabled'}>${teacherMutationInFlight ? 'Deleting selected...' : `Delete selected (${selectedCount})`}</button></div>`;
+  return `<div class="result-file-selection-control"><details class="result-file-select-menu" ${resultFileSelectionMenuOpen ? 'open' : ''}><summary data-action="result-file-selection-summary">Select result files (${selectedCount} selected)</summary><div class="result-file-select-options">${state.resultFiles.map(file => `<label class="result-file-choice"><input type="checkbox" data-action="select-result-file" data-file-id="${esc(file.id)}" aria-label="Select ${esc(file.name)}" ${selectedResultFileIds.has(file.id) ? 'checked' : ''} ${teacherMutationInFlight ? 'disabled' : ''}><span><strong>${esc(file.name)}</strong><span class="subtle">${formatDate(file.createdAt)} · ${(file.rows || []).length} results</span></span></label>`).join('')}</div></details><button type="button" class="btn btn-coral btn-small" data-action="delete-selected-result-files" ${selectedCount > 1 && !teacherMutationInFlight ? '' : 'disabled'}>${resultFileDeletionInFlight ? 'Deleting selected...' : `Delete selected (${selectedCount})`}</button></div>`;
 }
 function updateBulkDeletionButtons() {
   const archiveCount = teacherQuestionHistory.filter(item => selectedQuestionHistoryIds.has(item.quiz_id)).length;
@@ -1345,7 +1346,7 @@ function updateBulkDeletionButtons() {
   if (selectionSummary) selectionSummary.textContent = `Select result files (${fileCount} selected)`;
   document.querySelectorAll('[data-action="delete-selected-result-files"]').forEach(button => {
     button.disabled = teacherMutationInFlight || fileCount < 2;
-    button.textContent = teacherMutationInFlight ? 'Deleting selected...' : `Delete selected (${fileCount})`;
+    button.textContent = resultFileDeletionInFlight ? 'Deleting selected...' : `Delete selected (${fileCount})`;
   });
 }
 function updateSelectedStudentAccountControls() {
@@ -2898,6 +2899,7 @@ async function deleteSelectedResultFiles() {
   const previousState = structuredClone(state);
   const previousSelectedResultFileId = selectedResultFileId;
   teacherMutationInFlight = true;
+  resultFileDeletionInFlight = true;
   app();
   try {
     const selectedFileIds = new Set(selectedFiles.map(file => file.id));
@@ -2918,6 +2920,7 @@ async function deleteSelectedResultFiles() {
     selectedResultFileId = previousSelectedResultFileId;
     showToast(`Selected result files could not be deleted: ${error.message || error}`, 'error');
   } finally {
+    resultFileDeletionInFlight = false;
     teacherMutationInFlight = false;
     app();
   }
