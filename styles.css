@@ -172,7 +172,8 @@ tr:last-child td { border: 0; }
 .student-history-panel { margin-top: 17px; text-align: left; }
 .short-answer-review-queue, .short-answer-review-panel { margin-top: 17px; text-align: left; }
 .short-answer-review-queue .activity-item { align-items: center; }
-.short-answer-review-item { padding: 18px 0; border-top: 1px solid var(--line); }
+.short-answer-review-list { max-height: min(72vh, 640px); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding-right: 8px; }
+.short-answer-review-item { min-height: 160px; padding: 18px 0; border-top: 1px solid var(--line); }
 .short-answer-review-item h3 { margin: 8px 0 15px; overflow-wrap: anywhere; }
 .short-answer-review-item p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .short-answer-review-item .field { max-width: 260px; }
