@@ -483,6 +483,7 @@ function ensureStudentQuestionOrder() {
 }
 function app() {
   const studentDirectoryScrollTop = document.querySelector('.student-account-actions + .table-wrap')?.scrollTop;
+  const shortAnswerReviewScrollTop = document.querySelector('.short-answer-review-list')?.scrollTop;
   const focusedReviewQuestionId = document.activeElement?.matches('#teacher-short-answer-review-form [data-question-id]')
     ? document.activeElement.dataset.questionId
     : null;
@@ -502,6 +503,10 @@ function app() {
   const studentDirectoryTable = document.querySelector('.student-account-actions + .table-wrap');
   if (studentDirectoryTable && studentDirectoryScrollTop !== undefined) {
     studentDirectoryTable.scrollTop = studentDirectoryScrollTop;
+  }
+  const refreshedShortAnswerReviewList = document.querySelector('.short-answer-review-list');
+  if (refreshedShortAnswerReviewList && shortAnswerReviewScrollTop !== undefined) {
+    refreshedShortAnswerReviewList.scrollTop = shortAnswerReviewScrollTop;
   }
   const refreshedCartographerMap = document.querySelector('.cartographer-map-scroll');
   if (refreshedCartographerMap && cartographerMapScrollPosition) {
