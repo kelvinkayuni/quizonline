@@ -200,6 +200,7 @@ const defaultState = {
   importedFile: null,
   studentLoginActive: false,
   deactivatedStudentUsernames: [],
+  hideStudentQuestionFeedback: false,
   configSaved: false,
   config: { courseName: '', courseCode: '', totalQuestions: 0, duration: 0, start: '', end: '' },
   activity: [],
@@ -215,6 +216,7 @@ if (!state.studentQuestionOrders) state.studentQuestionOrders = {};
 if (!Array.isArray(state.deletedQuizIds)) state.deletedQuizIds = [];
 if (typeof state.quizStopped !== 'boolean') state.quizStopped = false;
 if (typeof state.studentLoginActive !== 'boolean') state.studentLoginActive = false;
+if (typeof state.hideStudentQuestionFeedback !== 'boolean') state.hideStudentQuestionFeedback = false;
 if (!Array.isArray(state.deactivatedStudentUsernames)) state.deactivatedStudentUsernames = [];
 if (typeof state.configSaved !== 'boolean') state.configSaved = false;
 if (!state.importedFile) { state.users = []; saveState(); }
@@ -516,10 +518,46 @@ function app() {
   updateImportedFileControls();
   saveWindowSession();
   restoreTeacherDrafts();
+  injectStudentFeedbackVisibilityToggle();
+  applyStudentDownloadPolicy();
   bindEvents();
   if (cartographerRefreshState) restoreCartographerRefreshState(cartographerRefreshState);
   if (cartographerPageScrollTop !== undefined) window.scrollTo(0, cartographerPageScrollTop);
   updateSelectedStudentAccountControls();
+}
+function injectStudentFeedbackVisibilityToggle() {
+  if (session?.role !== 'teacher' || teacherView !== 'results') return;
+  const header = document.querySelector('[data-action="clear-result-files"]')?.closest('.panel-head');
+  if (!header || header.querySelector('.student-feedback-toggle')) return;
+  header.insertAdjacentHTML('beforeend', `<label class="student-feedback-toggle"><span>Hide question feedback for students</span><input type="checkbox" data-action="toggle-student-feedback" ${state.hideStudentQuestionFeedback ? 'checked' : ''} ${teacherMutationInFlight ? 'disabled' : ''}><span class="student-feedback-switch" aria-hidden="true"></span></label>`);
+  header.querySelector('[data-action="toggle-student-feedback"]').addEventListener('change', async event => {
+    if (teacherMutationInFlight) return;
+    const previousValue = state.hideStudentQuestionFeedback;
+    const nextValue = event.currentTarget.checked;
+    if (nextValue === previousValue) return;
+    teacherMutationInFlight = true;
+    state.hideStudentQuestionFeedback = nextValue;
+    saveState({ localOnly: true });
+    app();
+    try {
+      await persistQuizState(state, 'teacher', { workspaceOnly: true, waitForSync: true });
+      showToast(nextValue ? 'Per-question feedback is hidden from students.' : 'Per-question feedback is visible to students.');
+    } catch (error) {
+      state.hideStudentQuestionFeedback = previousValue;
+      saveState({ localOnly: true });
+      showToast(`Student feedback setting could not be saved: ${error.message || error}`, 'error');
+    } finally {
+      teacherMutationInFlight = false;
+      app();
+    }
+  });
+}
+function applyStudentDownloadPolicy() {
+  if (session?.role !== 'student' || !state.hideStudentQuestionFeedback) return;
+  document.querySelectorAll('[data-action="download-student-history"], [data-action="download-quiz-report"]').forEach(button => {
+    button.disabled = true;
+    button.title = 'Disabled by the teacher while question feedback is hidden.';
+  });
 }
 function renderQuizFileSelectDropdown() {
   const select = document.querySelector('#result-file-select');
@@ -965,6 +1003,9 @@ async function refreshStudentQuizStateRaw() {
   if (configResult.error || workspaceResult.error) return;
   const config = configResult.data;
   const workspace = workspaceResult.data?.data || {};
+  const previousHideStudentQuestionFeedback = state.hideStudentQuestionFeedback;
+  state.hideStudentQuestionFeedback = Boolean(workspace.hideStudentQuestionFeedback);
+  const feedbackVisibilityChanged = previousHideStudentQuestionFeedback !== state.hideStudentQuestionFeedback;
   const publishedQuestions = getPublishedQuestionSnapshot(config, workspace);
   const previousQuizId = state.currentQuizId;
   const previousStopped = state.quizStopped;
@@ -1029,7 +1070,7 @@ async function refreshStudentQuizStateRaw() {
     saveStudentSession();
     app();
     if (state.questionsPublished && quizChanged) showToast('New quiz available. You can start now.');
-  } else if (historyChanged) app();
+  } else if (historyChanged || feedbackVisibilityChanged) app();
 }
 function activityList() { if (!state.activity.length) return '<div class="empty">No activity recorded yet. Your workspace will appear here as students participate.</div>'; return `<div class="activity">${state.activity.slice(0, 6).map(item => `<div class="activity-item"><span class="activity-icon">${icon(item.type || 'book')}</span><div>${esc(item.text)}<br><span class="subtle">${formatDate(item.time)}</span></div><span class="activity-time">${new Date(item.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></div>`).join('')}</div>`; }
 async function downloadCorrectionsPdf() {
@@ -1480,7 +1521,7 @@ function studentApp() {
   const answers = isShortAnswer
     ? `<div class="field full"><label for="short-answer-response">Your answer</label><textarea id="short-answer-response" placeholder="Type your answer..." ${session.feedback ? 'disabled' : ''}>${esc(session.response || '')}</textarea></div>`
     : question.choices.map((choice, index) => `<button class="answer ${session.selected === index ? 'selected' : ''}" data-answer="${index}"><span class="answer-letter">${String.fromCharCode(65 + index)}</span>${esc(choice)}</button>`).join('');
-  const feedback = session.feedback
+  const feedback = session.feedback && !state.hideStudentQuestionFeedback
     ? `<div class="feedback ${session.feedback.correct || session.feedback.partial ? 'correct' : 'incorrect'}">${session.feedback.partial ? `Partially correct. ${session.feedback.marksAwarded} of ${question.marks} marks awarded.` : session.feedback.correct ? `Correct. +${question.marks} marks awarded.` : 'Not quite. This question scores zero marks.'}${session.feedback.scoringMethod === 'cartographer' ? `<span class="subtle">Cartographer similarity: ${session.feedback.semanticSimilarity}% · coverage: ${session.feedback.semanticCoverage}%</span>` : session.feedback.scoringMethod === 'concept-matcher-fallback' ? '<span class="subtle">Marked with the existing concept matcher because Cartographer was unavailable.</span>' : ''}</div>`
     : '';
   const isLastQuestion = session.index === questionCount - 1;
@@ -2110,6 +2151,7 @@ async function handleLogin(event) {
     const workspace = data?.data || {};
     state.importedFile = workspace.importedFile || null;
     state.studentLoginActive = Boolean(workspace.studentLoginActive);
+    state.hideStudentQuestionFeedback = Boolean(workspace.hideStudentQuestionFeedback);
     state.deactivatedStudentUsernames = Array.isArray(workspace.deactivatedStudentUsernames) ? workspace.deactivatedStudentUsernames : [];
     if (Array.isArray(workspace.users)) state.users = workspace.users;
     saveState({ localOnly: true });
@@ -2910,9 +2952,10 @@ async function clearRecentActivity() {
   }
 }
 function downloadResults() { if (!window.XLSX) return; const file = state.resultFiles.find(item => item.id === selectedResultFileId) || state.resultFiles[0]; const results = file?.rows || state.results; if (!results.length) return; const fileQuizId = file?.id?.startsWith('quiz-') ? file.id.slice(5) : ''; const rows = [['Quiz ID', 'Student username', 'Number of questions attempted', 'Number answered incorrectly', 'Total marks obtained', 'Percentage score', 'Review status'], ...results.map(result => [result.quizId || fileQuizId || 'Not recorded', result.username, result.attempted, result.incorrect, result.score, `${result.percentage}%`, result.reviewStatus === 'provisional' ? 'Pending teacher review' : 'Final'])]; const sheet = XLSX.utils.aoa_to_sheet(rows); const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, 'Results'); XLSX.writeFile(book, `${file?.name || 'online-quiz-results'}.xlsx`); showToast('Results workbook downloaded.'); }
-function downloadStudentHistory() { if (!window.XLSX || !session) return; const history = state.studentHistory.filter(item => item.username === session.username); if (!history.length) return; const rows = [['Date', 'Duration (minutes)', 'Questions attempted', 'Questions right', 'Questions wrong', 'Marks scored', 'Total marks', 'Review status'], ...history.map(item => [formatDate(item.completedAt), item.durationMinutes, item.attempted, item.correct, item.incorrect, item.score, item.totalMarks, item.reviewStatus === 'provisional' ? 'Pending teacher review' : 'Final'])]; const sheet = XLSX.utils.aoa_to_sheet(rows); const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, 'Quiz history'); XLSX.writeFile(book, `${session.username}-quiz-history.xlsx`); showToast('Your quiz history was downloaded.'); }
+function downloadStudentHistory() { if (!window.XLSX || session?.role !== 'student' || state.hideStudentQuestionFeedback) return; const history = state.studentHistory.filter(item => item.username === session.username); if (!history.length) return; const rows = [['Date', 'Duration (minutes)', 'Questions attempted', 'Questions right', 'Questions wrong', 'Marks scored', 'Total marks', 'Review status'], ...history.map(item => [formatDate(item.completedAt), item.durationMinutes, item.attempted, item.correct, item.incorrect, item.score, item.totalMarks, item.reviewStatus === 'provisional' ? 'Pending teacher review' : 'Final'])]; const sheet = XLSX.utils.aoa_to_sheet(rows); const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, 'Quiz history'); XLSX.writeFile(book, `${session.username}-quiz-history.xlsx`); showToast('Your quiz history was downloaded.'); }
 async function downloadStudentQuizReport(quizId, button) {
   if (session?.role !== 'student' || !quizId) return showToast('Select a completed quiz before downloading its report.', 'error');
+  if (state.hideStudentQuestionFeedback) return;
   const student = state.users.find(user => user.username === session.username);
   if (!student?.password) return showToast('Your student login could not be verified. Please sign in again.', 'error');
   if (button) button.disabled = true;
