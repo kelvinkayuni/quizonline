@@ -1964,7 +1964,20 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
   const clearResultFiles = document.querySelector('[data-action="clear-result-files"]'); if (clearResultFiles) clearResultFiles.addEventListener('click', clearResultFileHistory);
   const clearHealth = document.querySelector('[data-action="clear-health"]'); if (clearHealth) clearHealth.addEventListener('click', clearAssessmentHealth);
   const clearActivity = document.querySelector('[data-action="clear-activity"]'); if (clearActivity) clearActivity.addEventListener('click', clearRecentActivity);
-  const startQuiz = document.querySelector('[data-action="start-quiz"]'); if (startQuiz) startQuiz.addEventListener('click', startStudentQuiz);
+  const startQuiz = document.querySelector('[data-action="start-quiz"]'); if (startQuiz) startQuiz.addEventListener('click', async event => {
+    const button = event.currentTarget;
+    const originalLabel = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Starting...';
+    try {
+      await startStudentQuiz();
+    } finally {
+      if (button.isConnected) {
+        button.disabled = false;
+        button.textContent = originalLabel;
+      }
+    }
+  });
   const retryResultSave = document.querySelector('[data-action="retry-result-save"]'); if (retryResultSave) retryResultSave.addEventListener('click', () => { if (session?.resultSyncPending) void finishQuiz(Boolean(session.resultAutoSubmitted)); });
   const addChoice = document.querySelector('[data-action="add-choice"]'); if (addChoice) addChoice.addEventListener('click', () => { const choices = document.querySelectorAll('[data-choice]'); const index = choices.length; if (index >= 8) return showToast('A question can have up to 8 choices.'); document.querySelector('#choices').insertAdjacentHTML('beforeend', choiceInput(index)); const row = document.querySelectorAll('.choice-row')[index]; row.querySelector('[data-action="remove-choice"]').addEventListener('click', () => { row.remove(); renumberChoices(); }); syncCorrectOptions(); updateChoiceCount(); });
   document.querySelectorAll('[data-action="remove-choice"]').forEach(button => button.addEventListener('click', () => { const choices = document.querySelectorAll('[data-choice]'); if (choices.length <= 2) return showToast('Keep at least two choices.'); button.closest('.choice-row').remove(); renumberChoices(); }));
