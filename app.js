@@ -529,7 +529,7 @@ function injectStudentFeedbackVisibilityToggle() {
   if (session?.role !== 'teacher' || teacherView !== 'results') return;
   const header = document.querySelector('[data-action="clear-result-files"]')?.closest('.panel-head');
   if (!header || header.querySelector('.student-feedback-toggle')) return;
-  header.insertAdjacentHTML('beforeend', `<label class="student-feedback-toggle"><span>Hide question feedback for students</span><input type="checkbox" data-action="toggle-student-feedback" ${state.hideStudentQuestionFeedback ? 'checked' : ''} ${teacherMutationInFlight ? 'disabled' : ''}><span class="student-feedback-switch" aria-hidden="true"></span></label>`);
+  header.insertAdjacentHTML('beforeend', `<label class="student-feedback-toggle"><span>Hide feedback</span><input type="checkbox" aria-label="Hide question feedback for students" data-action="toggle-student-feedback" ${state.hideStudentQuestionFeedback ? 'checked' : ''} ${teacherMutationInFlight ? 'disabled' : ''}><span class="student-feedback-switch" aria-hidden="true"></span></label>`);
   header.querySelector('[data-action="toggle-student-feedback"]').addEventListener('change', async event => {
     if (teacherMutationInFlight) return;
     const previousValue = state.hideStudentQuestionFeedback;
