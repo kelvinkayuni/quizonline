@@ -185,6 +185,7 @@ security definer
 set search_path = public, pg_temp
 as $$
 declare
+  saved_attempt public.quiz_attempts;
   report public.student_quiz_reports;
   enriched_question_details jsonb;
 begin
@@ -199,10 +200,10 @@ begin
       using errcode = '28000';
   end if;
 
-  if not exists (
-    select 1 from public.quiz_attempts
-    where username = p_username and quiz_id = p_quiz_id
-  ) then
+  select * into saved_attempt
+  from public.quiz_attempts
+  where username = p_username and quiz_id = p_quiz_id;
+  if not found then
     raise exception 'No completed result exists for this student and quiz.'
       using errcode = 'P0002';
   end if;
@@ -237,12 +238,33 @@ begin
       )
     else
       detail.value || jsonb_build_object(
+        'choices', coalesce(
+          archived_question.question->'choices',
+          detail.value->'choices',
+          '[]'::jsonb
+        ),
         'teacherAnswer', coalesce(
           case
             when coalesce(archived_question.question->>'correct', '') ~ '^[0-9]+$'
               then archived_question.question->'choices'->>((archived_question.question->>'correct')::integer)
           end,
           detail.value->>'teacherAnswer',
+          ''
+        ),
+        'teacherCorrectChoice', coalesce(
+          case
+            when coalesce(archived_question.question->>'correct', '') ~ '^[0-9]+$'
+              then chr(65 + (archived_question.question->>'correct')::integer)
+          end,
+          detail.value->>'teacherCorrectChoice',
+          ''
+        ),
+        'studentChoice', coalesce(
+          case
+            when coalesce(attempt_answer.answer->>'selected', '') ~ '^[0-9]+$'
+              then chr(65 + (attempt_answer.answer->>'selected')::integer)
+          end,
+          detail.value->>'studentChoice',
           ''
         )
       )
@@ -260,7 +282,13 @@ begin
     where history.quiz_id = p_quiz_id
       and question.value->>'id' = detail.value->>'questionId'
     limit 1
-  ) as archived_question on true;
+  ) as archived_question on true
+  left join lateral (
+    select answer.value as answer
+    from jsonb_array_elements(coalesce(saved_attempt.answers, '[]'::jsonb)) as answer(value)
+    where answer.value->>'questionId' = detail.value->>'questionId'
+    limit 1
+  ) as attempt_answer on true;
 
   return jsonb_build_object(
     'username', report.username,

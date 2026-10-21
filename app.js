@@ -4,6 +4,7 @@ import { supabase } from './supabase.js';
 import { extractCartographerFile, insertCartographerDocument, insertCartographerGlossaryEntry, insertCartographerNonSimilarPair, listCartographerCoordinates, listCartographerDocuments, listCartographerGlossary, listCartographerNonSimilarPairs, removeCartographerDocument, removeCartographerGlossaryEntry, saveCartographerCoordinates } from './semanticCorpus.js';
 import { areSemanticWordPairsEqual, compareSemanticText, createSemanticMap, isGlossaryVariantCanonicalPair, normalizeCorpusText, normalizeSemanticWord, tokenizeSemanticText, trainSemanticModel } from './semanticModel.js';
 import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, deleteTeacherQuizQuestionHistory, hydrateQuizState, listTeacherQuizQuestionHistory, loadStudentQuizReport, loadStudentQuizResult, loadTeacherQuizQuestionHistory, loadTeacherShortAnswerReview, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizConfiguration, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAccessChange, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt, reviewTeacherShortAnswerResult, waitForPendingQuestionSaves } from './supabaseStore.js';
+import { studentQuizQuestionReportLines } from './studentQuizReport.js';
 import { loadStudentPresence, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { SHORT_ANSWER_FULL_CREDIT_THRESHOLD, roundToOneDecimal, shortAnswerMarksAwarded, shortAnswerMatchScore } from './shortAnswerMatching.js';
 import { semanticCartographerMarksAwarded } from './semanticCartographerScoring.js';
@@ -3019,15 +3020,7 @@ async function downloadStudentQuizReport(quizId, button) {
     report.question_details.forEach(question => {
       ensureSpace(17);
       addText(`${question.questionNumber}. ${question.questionText}`, { fontSize: 12, lineHeight: 5.5, bold: true });
-      addText(`Your answer: ${question.studentAnswer || 'Not answered'}`);
-      const teacherAnswer = question.teacherAnswer || question.teacherReferenceAnswer;
-      const expectedConcepts = question.teacherExpectedAnswer || question.teacherExpectedConcept;
-      if (question.questionType === 'short-answer') {
-        addText(`Teacher answer: ${teacherAnswer || 'Not provided'}`);
-        addText(`Teacher expected concepts: ${expectedConcepts || 'Not available'}`);
-      } else if (teacherAnswer) {
-        addText(`Teacher answer: ${teacherAnswer}`);
-      }
+      studentQuizQuestionReportLines(question).forEach(line => addText(line));
       addText(`Marks: ${question.marksAwarded}/${question.marksPossible}`);
       y += 3;
     });
@@ -3128,12 +3121,23 @@ function finalizeStudentResult(studentSession, autoSubmitted) {
       : Number.isInteger(selectedIndex)
         ? String(question.choices?.[selectedIndex] || '')
         : '';
+    const isMultipleChoice = question.type !== 'short-answer';
+    const correctIndex = Number(question.correct);
+    const studentChoiceIsValid = Number.isInteger(selectedIndex)
+      && selectedIndex >= 0
+      && selectedIndex < (question.choices || []).length;
+    const correctChoiceIsValid = Number.isInteger(correctIndex)
+      && correctIndex >= 0
+      && correctIndex < (question.choices || []).length;
     return {
       questionId: String(question.id),
       questionNumber: index + 1,
       questionText: question.text,
       questionType: question.type === 'short-answer' ? 'short-answer' : 'multiple-choice',
       studentAnswer: studentAnswer || 'Not answered',
+      choices: isMultipleChoice ? (question.choices || []).map(String) : [],
+      studentChoice: isMultipleChoice && studentChoiceIsValid ? String.fromCharCode(65 + selectedIndex) : '',
+      teacherCorrectChoice: isMultipleChoice && correctChoiceIsValid ? String.fromCharCode(65 + correctIndex) : '',
       teacherAnswer: question.type === 'short-answer'
         ? String(question.referenceAnswer || '')
         : String(question.choices?.[question.correct] || ''),
