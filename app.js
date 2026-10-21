@@ -5,6 +5,7 @@ import { extractCartographerFile, insertCartographerDocument, insertCartographer
 import { areSemanticWordPairsEqual, compareSemanticText, createSemanticMap, isGlossaryVariantCanonicalPair, normalizeCorpusText, normalizeSemanticWord, tokenizeSemanticText, trainSemanticModel } from './semanticModel.js';
 import { claimStudentAttempt, deleteQuestionFromSupabase, deleteQuizAttempts, deleteTeacherQuizQuestionHistory, hydrateQuizState, listTeacherQuizQuestionHistory, loadStudentQuizReport, loadStudentQuizResult, loadTeacherQuizQuestionHistory, loadTeacherShortAnswerReview, persistActivityClear, persistMultipleChoiceQuestionToSupabase, persistQuizConfiguration, persistQuizState, persistShortAnswerQuestionToSupabase, persistStudentAccessChange, persistStudentAttempt, persistStudentQuizResult, publishQuizAtomically, reconcileStudentAttempt, reviewTeacherShortAnswerResult, waitForPendingQuestionSaves } from './supabaseStore.js';
 import { studentQuizQuestionReportLines } from './studentQuizReport.js';
+import { mergeFinalizedStudentHistory, pendingStudentQuizIds } from './studentReviewStatus.js';
 import { loadStudentPresence, markStudentOffline, markStudentOnline, markStudentsOffline } from './supabasePresence.js';
 import { SHORT_ANSWER_FULL_CREDIT_THRESHOLD, roundToOneDecimal, shortAnswerMarksAwarded, shortAnswerMatchScore } from './shortAnswerMatching.js';
 import { semanticCartographerMarksAwarded } from './semanticCartographerScoring.js';
@@ -18,6 +19,7 @@ let teacherShortAnswerReviewLoading = false;
 let teacherShortAnswerReviewDraft = {};
 let teacherShortAnswerReviewSaving = false;
 let lastProvisionalResultRefreshAt = 0;
+let provisionalStudentResultRefreshInFlight = false;
 
 async function refreshStudentQuizState() {
   if (!session || session.role !== 'student') return;
@@ -1639,26 +1641,49 @@ studentResult = function renderStudentResultReviewStatus() {
 
 function studentHistoryTable(history) { if (!history.length) return '<div class="empty">No completed quiz history yet.</div>'; return `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Quiz</th><th>Duration</th><th>Attempted</th><th>Right</th><th>Wrong</th><th>Marks scored</th><th>Review status</th><th>Report</th></tr></thead><tbody>${history.map(item => `<tr><td>${formatDate(item.completedAt)}</td><td>${esc(item.quizId || 'Not recorded')}</td><td>${item.durationMinutes || 0} min</td><td>${item.attempted}</td><td>${item.correct ?? Math.max(0, item.attempted - item.incorrect)}</td><td>${item.incorrect}</td><td><strong>${item.score}/${item.totalMarks}</strong></td><td><span class="badge">${item.reviewStatus === 'provisional' ? 'Review pending' : 'Final'}</span></td><td><button class="btn btn-secondary btn-small" data-action="download-quiz-report" data-quiz-id="${esc(item.quizId || '')}" ${item.quizId ? '' : 'disabled'}>Download report</button></td></tr>`).join('')}</tbody></table></div>`; }
 async function refreshProvisionalStudentResult() {
-  if (session?.role !== 'student' || !session.completed || session.result?.reviewStatus !== 'provisional') return;
+  if (session?.role !== 'student') return;
+  if (provisionalStudentResultRefreshInFlight) return;
+  const username = session.username;
+  const pendingQuizIds = new Set(pendingStudentQuizIds(state.studentHistory, username));
+  if (session.result?.reviewStatus === 'provisional' && session.quizId) {
+    pendingQuizIds.add(session.quizId);
+  }
+  if (!pendingQuizIds.size) return;
+
+  provisionalStudentResultRefreshInFlight = true;
   try {
-    const result = await loadStudentQuizResult(session.username, session.quizId);
-    if (!result || result.reviewStatus !== 'final') return;
-    session.result = result;
-    session.answers = result.answers;
-    session.resultSyncPending = false;
-    session.resultSyncError = '';
-    state.results = state.results.map(item => item.username === result.username && item.quizId === result.quizId ? result : item);
-    state.studentHistory = state.studentHistory.map(item => item.username === result.username && item.quizId === result.quizId ? result : item);
+    const refreshedResults = await Promise.all([...pendingQuizIds].map(async quizId => {
+      try {
+        return await loadStudentQuizResult(username, quizId);
+      } catch (error) {
+        console.warn(`Student review status refresh failed for quiz ${quizId}:`, error);
+        return null;
+      }
+    }));
+    if (session?.role !== 'student' || session.username !== username) return;
+    const finalizedResults = refreshedResults.filter(result => result?.reviewStatus === 'final');
+    if (!finalizedResults.length) return;
+
+    state.studentHistory = mergeFinalizedStudentHistory(state.studentHistory, username, finalizedResults);
+    state.results = mergeFinalizedStudentHistory(state.results, username, finalizedResults);
     state.resultFiles = state.resultFiles.map(file => ({
       ...file,
-      rows: (file.rows || []).map(item => item.username === result.username && item.quizId === result.quizId ? result : item)
+      rows: mergeFinalizedStudentHistory(file.rows || [], username, finalizedResults)
     }));
-    saveWindowSession();
+
+    const currentResult = finalizedResults.find(result => result.quizId === session.quizId);
+    if (currentResult) {
+      session.result = currentResult;
+      session.answers = currentResult.answers;
+      session.resultSyncPending = false;
+      session.resultSyncError = '';
+      saveWindowSession();
+    }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stateForLocalStorage()));
-    showToast('Your teacher has finalized this result.');
+    showToast('Your teacher has finalized a result.');
     app();
-  } catch {
-    return;
+  } finally {
+    provisionalStudentResultRefreshInFlight = false;
   }
 }
 function formatTime(totalSeconds) { const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0'); const seconds = Math.max(0, totalSeconds % 60).toString().padStart(2, '0'); return `${minutes}:${seconds}`; }
@@ -1867,10 +1892,12 @@ function bindEvents() { applyBranding(); positionResultFileSelectionControl(); c
   }
   if (session?.role === 'student') {
     studentQuizRefreshTimer = setInterval(async () => {
-      if (session?.completed && session.result?.reviewStatus === 'provisional'
-        && Date.now() - lastProvisionalResultRefreshAt >= 15000) {
-        lastProvisionalResultRefreshAt = Date.now();
-        await refreshProvisionalStudentResult();
+      if (pendingStudentQuizIds(state.studentHistory, session.username).length
+        || session?.result?.reviewStatus === 'provisional') {
+        if (Date.now() - lastProvisionalResultRefreshAt >= 15000) {
+          lastProvisionalResultRefreshAt = Date.now();
+          await refreshProvisionalStudentResult();
+        }
       }
       const accessResult = await supabase.from('quiz_workspace').select('data').eq('id', 1).maybeSingle();
       const accessData = accessResult.data?.data;
