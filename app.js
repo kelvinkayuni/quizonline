@@ -3020,6 +3020,14 @@ async function downloadStudentQuizReport(quizId, button) {
       ensureSpace(17);
       addText(`${question.questionNumber}. ${question.questionText}`, { fontSize: 12, lineHeight: 5.5, bold: true });
       addText(`Your answer: ${question.studentAnswer || 'Not answered'}`);
+      const teacherAnswer = question.teacherAnswer || question.teacherReferenceAnswer;
+      const expectedConcepts = question.teacherExpectedAnswer || question.teacherExpectedConcept;
+      if (question.questionType === 'short-answer') {
+        addText(`Teacher answer: ${teacherAnswer || 'Not provided'}`);
+        addText(`Teacher expected concepts: ${expectedConcepts || 'Not available'}`);
+      } else if (teacherAnswer) {
+        addText(`Teacher answer: ${teacherAnswer}`);
+      }
       addText(`Marks: ${question.marksAwarded}/${question.marksPossible}`);
       y += 3;
     });
@@ -3126,6 +3134,11 @@ function finalizeStudentResult(studentSession, autoSubmitted) {
       questionText: question.text,
       questionType: question.type === 'short-answer' ? 'short-answer' : 'multiple-choice',
       studentAnswer: studentAnswer || 'Not answered',
+      teacherAnswer: question.type === 'short-answer'
+        ? String(question.referenceAnswer || '')
+        : String(question.choices?.[question.correct] || ''),
+      teacherExpectedAnswer: question.type === 'short-answer' ? String(question.answer || '') : '',
+      teacherReferenceAnswer: question.type === 'short-answer' ? String(question.referenceAnswer || '') : '',
       submitted: Boolean(answer),
       marksAwarded,
       marksPossible,

@@ -392,6 +392,7 @@ set search_path = public, pg_temp
 as $$
 declare
   report public.student_quiz_reports;
+  enriched_question_details jsonb;
 begin
   if not exists (
     select 1 from public.quiz_workspace workspace,
@@ -411,10 +412,57 @@ begin
   if not found then
     raise exception 'A detailed report is not available for this quiz attempt.' using errcode = 'P0002';
   end if;
+
+  select coalesce(jsonb_agg(
+    case when detail.value->>'questionType' = 'short-answer' then
+      detail.value || jsonb_build_object(
+        'teacherExpectedAnswer', coalesce(
+          archived_question.question->>'answer',
+          detail.value->>'teacherExpectedAnswer',
+          ''
+        ),
+        'teacherReferenceAnswer', coalesce(
+          archived_question.question->>'referenceAnswer',
+          detail.value->>'teacherReferenceAnswer',
+          ''
+        ),
+        'teacherAnswer', coalesce(
+          archived_question.question->>'referenceAnswer',
+          detail.value->>'teacherAnswer',
+          ''
+        )
+      )
+    else
+      detail.value || jsonb_build_object(
+        'teacherAnswer', coalesce(
+          case
+            when coalesce(archived_question.question->>'correct', '') ~ '^[0-9]+$'
+              then archived_question.question->'choices'->>((archived_question.question->>'correct')::integer)
+          end,
+          detail.value->>'teacherAnswer',
+          ''
+        )
+      )
+    end
+    order by (detail.value->>'questionNumber')::integer
+  ), '[]'::jsonb)
+  into enriched_question_details
+  from jsonb_array_elements(report.question_details) as detail(value)
+  left join lateral (
+    select question.value as question
+    from public.quiz_question_history as history
+    cross join lateral jsonb_array_elements(
+      coalesce(history.question_snapshot->'questions', '[]'::jsonb)
+    ) as question(value)
+    where history.quiz_id = p_quiz_id
+      and question.value->>'id' = detail.value->>'questionId'
+    limit 1
+  ) as archived_question on true;
+
   return jsonb_build_object(
     'username', report.username,
     'quiz_id', report.quiz_id,
-    'question_details', report.question_details,
+    'question_details', enriched_question_details,
     'score', report.score,
     'total_marks', report.total_marks,
     'percentage', report.percentage,
